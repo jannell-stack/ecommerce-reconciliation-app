@@ -159,8 +159,15 @@ export async function createEskPayment(skFile, ncFile) {
   });
 
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Failed to create ESK-Payment file');
+    const text = await res.text();
+    let message = `Failed to create ESK-Payment file (${res.status})`;
+    try {
+      const data = JSON.parse(text);
+      if (data.error) message = data.error;
+    } catch {
+      if (text.trim()) message = text.trim().slice(0, 300);
+    }
+    throw new Error(message);
   }
 
   const blob = await res.blob();

@@ -188,8 +188,12 @@ function loadTemplateWorkbook() {
   return XLSX.read(fs.readFileSync(TEMPLATE_PATH), {
     type: 'buffer',
     cellFormula: true,
-    cellStyles: true,
+    cellStyles: false,
   });
+}
+
+function useValuesOnlyOutput() {
+  return process.env.ESK_VALUES_ONLY === 'true' || process.env.NODE_ENV === 'production';
 }
 
 function getTemplateMainSheetName(workbook) {
@@ -240,22 +244,13 @@ function buildNcMap(ncRows) {
   return map;
 }
 
-function cloneSheet(sheet) {
-  const clone = { ...sheet };
-  for (const key of Object.keys(sheet)) {
-    if (key.startsWith('!')) continue;
-    clone[key] = { ...sheet[key] };
-  }
-  return clone;
-}
-
 function clearFormulaCells(sheet, excelRow, columns) {
   for (const column of columns) {
     delete sheet[`${column}${excelRow}`];
   }
 }
 
-function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange) {
+function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange, valuesOnly) {
   const orderId = extractOrderId(
     ncRow[NC_COL.NOTE],
     ncRow[NC_COL.NOTE_HELPER],
@@ -267,7 +262,11 @@ function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange
     : leftOrderId(note);
   const docNo = String(ncRow[NC_COL.DOC_NO] ?? '').trim();
 
-  setCell(sheet, `A${excelRow}`, { f: `LEFT(G${excelRow},13)`, v: orderKey, t: 's' });
+  if (valuesOnly) {
+    setCell(sheet, `A${excelRow}`, orderKey);
+  } else {
+    setCell(sheet, `A${excelRow}`, { f: `LEFT(G${excelRow},13)`, v: orderKey, t: 's' });
+  }
   setCell(sheet, `B${excelRow}`, ' ');
   setCell(sheet, `C${excelRow}`, docNo);
   setCell(
@@ -287,11 +286,15 @@ function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange
       const skMatch = lookupSk(orderKey, skLookup, ncRow[NC_COL.AMT]);
       hValue = skMatch?.pricePaid ?? null;
       if (hValue != null && Number.isNaN(hValue)) hValue = null;
-      setCell(sheet, `H${excelRow}`, {
-        f: `VLOOKUP(A${excelRow},${ordersRange},19,0)`,
-        v: hValue,
-        t: 'n',
-      });
+      if (valuesOnly) {
+        setCell(sheet, `H${excelRow}`, hValue);
+      } else {
+        setCell(sheet, `H${excelRow}`, {
+          f: `VLOOKUP(A${excelRow},${ordersRange},19,0)`,
+          v: hValue,
+          t: 'n',
+        });
+      }
     } else if (pattern.hValue != null) {
       hValue = pattern.hValue;
       setCell(sheet, `H${excelRow}`, { v: hValue, t: 'n' });
@@ -300,11 +303,15 @@ function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange
     if (pattern.hasI && hValue != null) {
       const amount = parseNumber(ncRow[NC_COL.AMT]);
       const diff = Number.isNaN(amount) ? null : amount - hValue;
-      setCell(sheet, `I${excelRow}`, {
-        f: `F${excelRow}-H${excelRow}`,
-        v: diff,
-        t: 'n',
-      });
+      if (valuesOnly) {
+        setCell(sheet, `I${excelRow}`, diff);
+      } else {
+        setCell(sheet, `I${excelRow}`, {
+          f: `F${excelRow}-H${excelRow}`,
+          v: diff,
+          t: 'n',
+        });
+      }
     }
 
     if (pattern.hasJ) {
@@ -312,11 +319,15 @@ function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange
       const paymentType =
         pattern.jValue ??
         mapPaymentType(ncRow[NC_COL.PAYMENT_TYPE], skMatch?.paymentMethod);
-      setCell(sheet, `J${excelRow}`, {
-        f: `VLOOKUP(A${excelRow},${ordersRange},20,0)`,
-        v: paymentType,
-        t: 's',
-      });
+      if (valuesOnly) {
+        setCell(sheet, `J${excelRow}`, paymentType);
+      } else {
+        setCell(sheet, `J${excelRow}`, {
+          f: `VLOOKUP(A${excelRow},${ordersRange},20,0)`,
+          v: paymentType,
+          t: 's',
+        });
+      }
     }
   }
 
@@ -325,17 +336,29 @@ function updateFormulaRow(sheet, excelRow, ncRow, pattern, skLookup, ordersRange
       extractReferToInvoice(note) || extractReferToInvoice(ncRow[NC_COL.NOTE]);
     const kValue = pattern.kValue ?? referInvoice ?? null;
     if (kValue != null || pattern.kFormula) {
-      setCell(sheet, `K${excelRow}`, {
-        f: pattern.kFormula || undefined,
-        v: kValue,
-        t: typeof kValue === 'number' ? 'n' : 's',
-      });
+      if (valuesOnly) {
+        setCell(sheet, `K${excelRow}`, kValue);
+      } else {
+        setCell(sheet, `K${excelRow}`, {
+          f: pattern.kFormula || undefined,
+          v: kValue,
+          t: typeof kValue === 'number' ? 'n' : 's',
+        });
+      }
     }
   }
 }
 
-function buildMainSheet(templateMain, templatePatterns, ncMap, skRows, skLookup, listingDate) {
-  const sheet = cloneSheet(templateMain);
+function buildMainSheet(
+  templateMain,
+  templatePatterns,
+  ncMap,
+  skRows,
+  skLookup,
+  listingDate,
+  valuesOnly,
+) {
+  const sheet = templateMain;
   const templateRows = XLSX.utils.sheet_to_json(templateMain, { header: 1, defval: null });
   const ordersLastRow = Math.max(skRows.length, 2);
   const ordersRange = `Orders!$A$1:$AG$${ordersLastRow}`;
@@ -355,7 +378,7 @@ function buildMainSheet(templateMain, templatePatterns, ncMap, skRows, skLookup,
     const pattern = templatePatterns.get(docNo);
     if (!pattern) continue;
 
-    updateFormulaRow(sheet, i + 1, ncRow, pattern, skLookup, ordersRange);
+    updateFormulaRow(sheet, i + 1, ncRow, pattern, skLookup, ordersRange, valuesOnly);
     generated += 1;
   }
 
@@ -380,6 +403,7 @@ function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     ? `Payment Listing-${listingDate.sheetLabel}`
     : templateMainName;
 
+  const valuesOnly = useValuesOnlyOutput();
   const skLookup = buildSkLookup(skRows);
   const ncMap = buildNcMap(ncRows);
   const { sheet: mainSheet, generated } = buildMainSheet(
@@ -389,21 +413,26 @@ function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     skRows,
     skLookup,
     listingDate,
+    valuesOnly,
   );
 
   const workbook = {
-    SheetNames: [],
-    Sheets: {},
+    SheetNames: [sheetTitle],
+    Sheets: {
+      [sheetTitle]: mainSheet,
+    },
   };
 
-  workbook.SheetNames.push(sheetTitle);
-  workbook.Sheets[sheetTitle] = mainSheet;
+  if (!valuesOnly) {
+    workbook.SheetNames.push('Orders');
+    workbook.Sheets.Orders = XLSX.utils.aoa_to_sheet(skRows);
+  }
 
-  const ordersSheet = XLSX.utils.aoa_to_sheet(skRows);
-  workbook.SheetNames.push('Orders');
-  workbook.Sheets.Orders = ordersSheet;
-
-  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  const buffer = XLSX.write(workbook, {
+    type: 'buffer',
+    bookType: 'xlsx',
+    compression: true,
+  });
   const filename = `ESK-Payment${listingDate ? `-${listingDate.sheetLabel}` : ''}.xlsx`;
 
   return {

@@ -7,7 +7,10 @@ const {
 const { createEskPaymentWorkbook } = require('../services/eskPayment');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 function sendWorkbook(res, { buffer, filename }) {
   res.setHeader(
@@ -64,7 +67,10 @@ router.post(
         filename: result.filename,
       });
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      console.error('[esk-payment]', err);
+      res.status(500).json({
+        error: err.message || 'Failed to create ESK-Payment file',
+      });
     }
   },
 );
