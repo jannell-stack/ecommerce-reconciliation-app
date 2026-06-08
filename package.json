@@ -1,0 +1,15 @@
+{
+  "name": "ecommerce-reconciliation-app",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix backend",
+    "postinstall": "npm run install:all"
+  }
+}
