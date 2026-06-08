@@ -82,7 +82,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(
     isProduction
       ? `Reconciliation app running at http://0.0.0.0:${PORT}`
@@ -90,3 +90,6 @@ app.listen(PORT, '0.0.0.0', () => {
   );
   startScheduler();
 });
+
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000;
