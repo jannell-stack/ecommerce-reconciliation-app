@@ -8,7 +8,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATA_DIR
-        value: /data
+        value: /app/backend/data
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
       - key: CRON_ENABLED
         value: "false"
       - key: SHOPIFY_STORE_DOMAIN
