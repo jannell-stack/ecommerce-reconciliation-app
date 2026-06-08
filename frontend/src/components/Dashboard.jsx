@@ -20,6 +20,7 @@ import {
   runReconciliation2,
   downloadReconciliationExcel,
   downloadReconciliationExcel2,
+  createEskPayment,
 } from '../api';
 
 const ORDER_ID_PATTERN = /^[A-Za-z0-9#._\-/ ]{1,64}$/;
@@ -272,6 +273,9 @@ export default function Dashboard() {
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [insightsError, setInsightsError] = useState(null);
   const [dataHealth, setDataHealth] = useState(null);
+  const [eskSkFile, setEskSkFile] = useState(null);
+  const [eskNcFile, setEskNcFile] = useState(null);
+  const [eskCreating, setEskCreating] = useState(false);
 
   const setters = useMemo(
     () => ({ setMatched, setUnmatched, setSummary }),
@@ -499,11 +503,75 @@ export default function Dashboard() {
       </header>
 
       <section className="toolbar">
+        <div className="toolbar__group toolbar__group--excel toolbar__group--esk">
+          <span className="toolbar__label">ESK Payment</span>
+          <div className="toolbar__actions toolbar__actions--stacked">
+            <label className="file-btn btn-integration">
+              SK Combined
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                hidden
+                disabled={loading || eskCreating}
+                onChange={(e) => {
+                  setEskSkFile(e.target.files?.[0] || null);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            <label className="file-btn btn-integration">
+              NC Listing
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                hidden
+                disabled={loading || eskCreating}
+                onChange={(e) => {
+                  setEskNcFile(e.target.files?.[0] || null);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn-primary btn-esk-create"
+              disabled={loading || eskCreating || !eskSkFile || !eskNcFile}
+              onClick={async () => {
+                setEskCreating(true);
+                setError(null);
+                setMessage(null);
+                try {
+                  const result = await createEskPayment(eskSkFile, eskNcFile);
+                  setMessage(
+                    `Created ${result.filename}${
+                      result.generated != null
+                        ? ` (${result.generated} row(s))`
+                        : ''
+                    }`,
+                  );
+                  setEskSkFile(null);
+                  setEskNcFile(null);
+                } catch (err) {
+                  setError(err.message);
+                } finally {
+                  setEskCreating(false);
+                }
+              }}
+            >
+              {eskCreating ? 'Creating…' : 'Create ESK-Payment'}
+            </button>
+          </div>
+          <span className="toolbar__hint">
+            {eskSkFile || eskNcFile
+              ? `${eskSkFile?.name || 'SK file missing'} + ${eskNcFile?.name || 'NC file missing'}`
+              : 'SK Combined + NC Payment Listing → ESK-Payment.xlsx'}
+          </span>
+        </div>
         <div className="toolbar__group toolbar__group--excel">
           <span className="toolbar__label">Order.xlsx</span>
           <div className="toolbar__actions">
             <label className="file-btn btn-integration">
-              Import NC
+              Import ESK
               <input
                 type="file"
                 accept=".xlsx,.xls"

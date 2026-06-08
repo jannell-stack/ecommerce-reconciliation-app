@@ -1,10 +1,13 @@
 const express = require('express');
+const multer = require('multer');
 const {
   exportReconciliationBuffer,
   exportReconciliation2Buffer,
 } = require('../services/exportExcel');
+const { createEskPaymentWorkbook } = require('../services/eskPayment');
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 function sendWorkbook(res, { buffer, filename }) {
   res.setHeader(
@@ -30,5 +33,40 @@ router.get('/reconciliation-2', (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+router.post(
+  '/esk-payment',
+  upload.fields([
+    { name: 'skFile', maxCount: 1 },
+    { name: 'ncFile', maxCount: 1 },
+  ]),
+  (req, res) => {
+    const skFile = req.files?.skFile?.[0];
+    const ncFile = req.files?.ncFile?.[0];
+
+    if (!skFile) {
+      return res.status(400).json({ error: 'SK Combined file required (field: skFile)' });
+    }
+    if (!ncFile) {
+      return res.status(400).json({ error: 'NC Payment Listing file required (field: ncFile)' });
+    }
+
+    try {
+      const result = createEskPaymentWorkbook(skFile.buffer, ncFile.buffer);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${result.filename}"`,
+      );
+      res.setHeader('X-Esk-Generated-Rows', String(result.generated));
+      res.setHeader('X-Esk-Skipped-Rows', String(result.skipped));
+      sendWorkbook(res, {
+        buffer: result.buffer,
+        filename: result.filename,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  },
+);
 
 module.exports = router;

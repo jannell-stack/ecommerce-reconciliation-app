@@ -147,3 +147,36 @@ export function downloadReconciliationExcel() {
 export function downloadReconciliationExcel2() {
   return downloadExcelExport('/export/reconciliation-2', 'reconciliation-2');
 }
+
+export async function createEskPayment(skFile, ncFile) {
+  const form = new FormData();
+  form.append('skFile', skFile);
+  form.append('ncFile', ncFile);
+
+  const res = await fetch(`${API_BASE}/export/esk-payment`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to create ESK-Payment file');
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || 'ESK-Payment.xlsx';
+  const generated = res.headers.get('X-Esk-Generated-Rows');
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  return { filename, generated: generated ? Number(generated) : null };
+}

@@ -85,6 +85,14 @@
   margin-bottom: 0.25rem;
 }
 
+.toolbar__group--esk .toolbar__actions--stacked {
+  flex-wrap: wrap;
+}
+
+.btn-esk-create {
+  min-width: 10.5rem;
+}
+
 .toolbar__actions {
   display: inline-flex;
   align-items: center;
