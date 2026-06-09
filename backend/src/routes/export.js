@@ -43,7 +43,7 @@ router.post(
     { name: 'skFile', maxCount: 1 },
     { name: 'ncFile', maxCount: 1 },
   ]),
-  (req, res) => {
+  async (req, res) => {
     const skFile = req.files?.skFile?.[0];
     const ncFile = req.files?.ncFile?.[0];
 
@@ -55,7 +55,7 @@ router.post(
     }
 
     try {
-      const result = createEskPaymentWorkbook(skFile.buffer, ncFile.buffer);
+      const result = await createEskPaymentWorkbook(skFile.buffer, ncFile.buffer);
       res.setHeader(
         'Content-Disposition',
         `attachment; filename="${result.filename}"`,

@@ -564,7 +564,7 @@ export default function Dashboard() {
           <span className="toolbar__hint">
             {eskSkFile || eskNcFile
               ? `${eskSkFile?.name || 'SK file missing'} + ${eskNcFile?.name || 'NC file missing'}`
-              : 'SK Combined + NC Payment Listing → ESK-Payment.xlsx'}
+              : 'SK Combined + NC Payment Listing → ESK-Payment Listing.xlsx'}
           </span>
         </div>
         <div className="toolbar__group toolbar__group--excel">

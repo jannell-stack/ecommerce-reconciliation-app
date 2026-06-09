@@ -173,7 +173,7 @@ export async function createEskPayment(skFile, ncFile) {
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') || '';
   const match = disposition.match(/filename="?([^"]+)"?/);
-  const filename = match?.[1] || 'ESK-Payment.xlsx';
+  const filename = match?.[1] || 'ESK-Payment Listing.xlsx';
   const generated = res.headers.get('X-Esk-Generated-Rows');
 
   const url = URL.createObjectURL(blob);

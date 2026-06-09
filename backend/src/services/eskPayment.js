@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
+const { applyColumnBDateStyles } = require('./eskPaymentStyles');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'templates', 'ESK-Payment-template.xlsx');
 const META_PATH = path.join(__dirname, '..', '..', 'templates', 'esk-payment-meta.json');
@@ -35,6 +36,8 @@ function cellHasContent(cell) {
   return cell.v != null && cell.v !== '';
 }
 
+const LISTING_DATE_FORMAT = 'm/d/yy';
+
 function setCell(sheet, address, value) {
   if (value && typeof value === 'object' && ('v' in value || 'f' in value)) {
     sheet[address] = value;
@@ -45,6 +48,29 @@ function setCell(sheet, address, value) {
     t: typeof value === 'number' ? 'n' : 's',
     v: value,
   };
+}
+
+function isExcelDateSerial(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 30000 && value <= 60000;
+}
+
+function setDateCell(sheet, address, serial) {
+  if (!isExcelDateSerial(serial)) return;
+  const existing = sheet[address] || {};
+  sheet[address] = {
+    ...existing,
+    t: 'n',
+    v: serial,
+    z: LISTING_DATE_FORMAT,
+  };
+}
+
+function setColumnBCell(sheet, address, value) {
+  if (isExcelDateSerial(value)) {
+    setDateCell(sheet, address, value);
+    return;
+  }
+  setCell(sheet, address, value);
 }
 
 function parseNumber(value) {
@@ -229,7 +255,8 @@ function loadTemplateWorkbook() {
   return XLSX.read(fs.readFileSync(TEMPLATE_PATH), {
     type: 'buffer',
     cellFormula: true,
-    cellStyles: false,
+    cellStyles: true,
+    cellNF: true,
   });
 }
 
@@ -406,6 +433,10 @@ function applyHeaderRows(sheet, headerRows) {
     row.forEach((value, columnIndex) => {
       if (value == null || value === '') return;
       const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+      if (columnIndex === 1) {
+        setColumnBCell(sheet, address, value);
+        return;
+      }
       setCell(sheet, address, value);
     });
   });
@@ -413,11 +444,20 @@ function applyHeaderRows(sheet, headerRows) {
 
 function applySpacerRow(sheet, excelRow, cells) {
   for (const [column, cell] of Object.entries(cells)) {
+    const address = `${column}${excelRow}`;
     if (cell.f) {
-      sheet[`${column}${excelRow}`] = { t: cell.t || 's', v: cell.v, f: cell.f };
-    } else {
-      setCell(sheet, `${column}${excelRow}`, cell.v);
+      const output = { t: cell.t || 's', v: cell.v, f: cell.f };
+      if (column === 'B' && isExcelDateSerial(cell.v)) {
+        output.z = LISTING_DATE_FORMAT;
+      }
+      sheet[address] = output;
+      continue;
     }
+    if (column === 'B') {
+      setColumnBCell(sheet, address, cell.v);
+      continue;
+    }
+    setCell(sheet, address, cell.v);
   }
 }
 
@@ -441,7 +481,7 @@ function buildMainSheet(
   let generated = 0;
 
   if (listingDate) {
-    setCell(sheet, 'B3', listingDate.serial);
+    setDateCell(sheet, 'B3', listingDate.serial);
   }
 
   for (let i = 3; i < templateRows.length; i += 1) {
@@ -469,7 +509,7 @@ function buildMainSheetFromMeta(meta, ncMap, skLookup, listingDate) {
   applyHeaderRows(sheet, meta.headerRows);
 
   if (listingDate) {
-    setCell(sheet, 'B3', listingDate.serial);
+    setDateCell(sheet, 'B3', listingDate.serial);
   }
 
   meta.layout.forEach((entry, index) => {
@@ -491,7 +531,7 @@ function buildMainSheetFromMeta(meta, ncMap, skLookup, listingDate) {
   return { sheet, generated, rowCount };
 }
 
-function createEskPaymentWorkbook(skBuffer, ncBuffer) {
+async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
   const valuesOnly = useValuesOnlyOutput();
   const { sheetName: ncSheetName, rows: ncRows } = readSheetRows(ncBuffer, /payment listing/i);
 
@@ -557,12 +597,14 @@ function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     workbook.Sheets.Orders = XLSX.utils.aoa_to_sheet(skRows);
   }
 
-  const buffer = XLSX.write(workbook, {
+  let buffer = XLSX.write(workbook, {
     type: 'buffer',
     bookType: 'xlsx',
     compression: true,
+    cellStyles: true,
   });
-  const filename = `ESK-Payment${listingDate ? `-${listingDate.sheetLabel}` : ''}.xlsx`;
+  buffer = await applyColumnBDateStyles(buffer);
+  const filename = `ESK-Payment Listing${listingDate ? `-${listingDate.sheetLabel}` : ''}.xlsx`;
 
   return {
     buffer,
