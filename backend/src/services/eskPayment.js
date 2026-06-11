@@ -341,6 +341,48 @@ function skRowPricePaid(row) {
   return isSkFeeRow(row) ? 0 : NaN;
 }
 
+function skRowPricePaidFromValues(rawPrice, itemType) {
+  const pricePaid = parseNumber(rawPrice);
+  if (Number.isFinite(pricePaid)) return pricePaid;
+  return itemType === 'Fee' ? 0 : NaN;
+}
+
+function buildProductionSkLookup(skBuffer) {
+  const workbook = XLSX.read(skBuffer, { type: 'buffer', ...XLSX_READ_OPTS });
+  const sheetName = findSheet(workbook, /orders/i);
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet?.['!ref']) {
+    throw new Error('No Orders worksheet found in SK Combined file');
+  }
+
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const lookup = new Map();
+  let currentOrderId = '';
+
+  const cellValue = (row, col) => sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+
+  for (let row = 1; row <= range.e.r; row += 1) {
+    const orderId = String(cellValue(row, SK_ORDER_ID) ?? '').trim();
+    const itemType = String(cellValue(row, SK_ITEM_TYPE) ?? '').trim();
+    const pricePaid = skRowPricePaidFromValues(cellValue(row, SK_PRICE_PAID), itemType);
+    const paymentMethod = String(cellValue(row, SK_PAYMENT_METHOD) ?? '').trim();
+
+    if (orderId) {
+      currentOrderId = orderId;
+      addSkLookupEntry(lookup, orderId, pricePaid, paymentMethod);
+      continue;
+    }
+
+    if (currentOrderId && Number.isFinite(pricePaid) && pricePaid !== 0) {
+      addSkLookupEntry(lookup, currentOrderId, pricePaid, paymentMethod);
+    } else if (currentOrderId && itemType === 'Fee' && paymentMethod) {
+      addSkLookupEntry(lookup, currentOrderId, 0, paymentMethod);
+    }
+  }
+
+  return { lookup, sheetName, rowCount: range.e.r + 1 };
+}
+
 function normalizeSkPaymentMethod(ncPaymentType) {
   const paymentType = String(ncPaymentType ?? '').trim().toUpperCase();
   if (paymentType === 'STRIPE') return 'Stripe';
@@ -889,7 +931,7 @@ function buildMainSheetFromNcRows(
   let generated = 0;
   let excelRow = NC_HEADER_ROWS;
   const usageTracker = createSkUsageTracker(skLookup);
-  const ordersLookup = buildOrdersLookupRange(skRows.length);
+  const ordersLookup = valuesOnly ? null : buildOrdersLookupRange(skRows.length);
 
   for (let i = NC_HEADER_ROWS; i < ncRows.length; i += 1) {
     const ncRow = ncRows[i];
@@ -943,13 +985,19 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
 
   const listingDate = parseListingDate(ncRows[2]?.[0]);
   const ncMap = buildNcMap(ncRows);
-  const { sheetName: skSheetName, rows: skRows } = readSheetRows(
-    skBuffer,
-    /orders/i,
-    valuesOnly ? {} : { cellFormula: true },
-  );
-  const preparedSkRows = prepareOrdersRowsForLookup(skRows);
-  const skLookup = buildSkLookup(preparedSkRows);
+
+  let skSheetName;
+  let skLookup;
+  let preparedSkRows = null;
+
+  if (valuesOnly) {
+    ({ lookup: skLookup, sheetName: skSheetName } = buildProductionSkLookup(skBuffer));
+  } else {
+    const skData = readSheetRows(skBuffer, /orders/i, { cellFormula: true });
+    skSheetName = skData.sheetName;
+    preparedSkRows = prepareOrdersRowsForLookup(skData.rows);
+    skLookup = buildSkLookup(preparedSkRows);
+  }
 
   let mainSheet;
   let generated;
@@ -963,7 +1011,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
 
     ({ sheet: mainSheet, generated } = buildMainSheetFromNcRows(
       ncRows,
-      preparedSkRows,
+      preparedSkRows || [],
       skLookup,
       listingDate,
       valuesOnly,
@@ -987,17 +1035,18 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     ));
   }
 
-  const ordersSheet = valuesOnly
-    ? buildSlimOrdersSheet(preparedSkRows)
-    : XLSX.utils.aoa_to_sheet(preparedSkRows);
-
-  const workbook = {
-    SheetNames: [sheetTitle, 'Orders'],
-    Sheets: {
-      [sheetTitle]: mainSheet,
-      Orders: ordersSheet,
-    },
-  };
+  const workbook = valuesOnly
+    ? {
+      SheetNames: [sheetTitle],
+      Sheets: { [sheetTitle]: mainSheet },
+    }
+    : {
+      SheetNames: [sheetTitle, 'Orders'],
+      Sheets: {
+        [sheetTitle]: mainSheet,
+        Orders: XLSX.utils.aoa_to_sheet(preparedSkRows),
+      },
+    };
 
   let buffer = XLSX.write(workbook, {
     type: 'buffer',

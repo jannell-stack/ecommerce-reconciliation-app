@@ -54,8 +54,19 @@ router.post(
       return res.status(400).json({ error: 'NC Payment Listing file required (field: ncFile)' });
     }
 
+    const startedAt = Date.now();
+    const memBefore = process.memoryUsage();
+
     try {
       const result = await createEskPaymentWorkbook(skFile.buffer, ncFile.buffer);
+      const memAfter = process.memoryUsage();
+      console.info('[esk-payment] ok', {
+        generated: result.generated,
+        durationMs: Date.now() - startedAt,
+        heapUsedMB: Math.round(memAfter.heapUsed / 1024 / 1024),
+        heapDeltaMB: Math.round((memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024),
+        outputMB: Math.round(result.buffer.length / 1024 / 1024),
+      });
       res.setHeader(
         'Content-Disposition',
         `attachment; filename="${result.filename}"`,
@@ -67,7 +78,11 @@ router.post(
         filename: result.filename,
       });
     } catch (err) {
-      console.error('[esk-payment]', err);
+      console.error('[esk-payment] failed', {
+        durationMs: Date.now() - startedAt,
+        message: err.message,
+        stack: err.stack,
+      });
       res.status(500).json({
         error: err.message || 'Failed to create ESK-Payment file',
       });
