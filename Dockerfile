@@ -32,7 +32,7 @@ COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 ENV NODE_ENV=production
 ENV DATA_DIR=/app/backend/data
-ENV NODE_OPTIONS=--max-old-space-size=384
+ENV NODE_OPTIONS=--max-old-space-size=460
 
 RUN mkdir -p /app/backend/data
 

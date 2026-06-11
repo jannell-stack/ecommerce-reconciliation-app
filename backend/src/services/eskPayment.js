@@ -424,6 +424,32 @@ function resolveSkMatch(orderId, skLookup, amount, context, usageTracker) {
   return amountMatches[usedBefore] || candidate;
 }
 
+function buildSlimOrdersSheet(preparedSkRows) {
+  const slimRows = preparedSkRows.map((row, index) => {
+    if (index === 0) {
+      return [
+        row[SK_ORDER_ID] || 'Order ID',
+        row[SK_PRICE_PAID] ?? 'Price Paid',
+        row[SK_PAYMENT_METHOD] ?? 'Payment Method',
+        row[SK_LOOKUP_KEY] || 'LookupKey',
+        row[SK_LOOKUP_PRICE] ?? 'LookupPrice',
+        row[SK_LOOKUP_METHOD] ?? 'LookupMethod',
+      ];
+    }
+
+    return [
+      row[SK_ORDER_ID] ?? '',
+      row[SK_PRICE_PAID] ?? '',
+      row[SK_PAYMENT_METHOD] ?? '',
+      row[SK_LOOKUP_KEY] ?? '',
+      row[SK_LOOKUP_PRICE] ?? '',
+      row[SK_LOOKUP_METHOD] ?? '',
+    ];
+  });
+
+  return XLSX.utils.aoa_to_sheet(slimRows);
+}
+
 function prepareOrdersRowsForLookup(rows) {
   const prepared = rows.map((row) => {
     const copy = [...row];
@@ -920,7 +946,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
   const { sheetName: skSheetName, rows: skRows } = readSheetRows(
     skBuffer,
     /orders/i,
-    { cellFormula: true },
+    valuesOnly ? {} : { cellFormula: true },
   );
   const preparedSkRows = prepareOrdersRowsForLookup(skRows);
   const skLookup = buildSkLookup(preparedSkRows);
@@ -961,11 +987,15 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     ));
   }
 
+  const ordersSheet = valuesOnly
+    ? buildSlimOrdersSheet(preparedSkRows)
+    : XLSX.utils.aoa_to_sheet(preparedSkRows);
+
   const workbook = {
     SheetNames: [sheetTitle, 'Orders'],
     Sheets: {
       [sheetTitle]: mainSheet,
-      Orders: XLSX.utils.aoa_to_sheet(preparedSkRows),
+      Orders: ordersSheet,
     },
   };
 
@@ -973,10 +1003,12 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     type: 'buffer',
     bookType: 'xlsx',
     compression: true,
-    cellStyles: true,
+    cellStyles: !valuesOnly,
     cellFormula: !valuesOnly,
   });
-  buffer = await applyColumnBDateStyles(buffer);
+  if (!valuesOnly) {
+    buffer = await applyColumnBDateStyles(buffer);
+  }
   const filename = `ESK-Payment Listing${listingDate ? `-${listingDate.sheetLabel}` : ''}.xlsx`;
 
   return {
