@@ -609,18 +609,11 @@ function lookupSk(orderId, skLookup, amount, { paymentType, note } = {}) {
   }
 
   const expectedMethod = normalizeSkPaymentMethod(paymentType);
-  if (isTopUpNote(note) && expectedMethod === 'Stripe') {
-    const feeRow = rows.find(
-      (row) => row.pricePaid === 0 && row.paymentMethod === 'Stripe',
-    );
-    if (feeRow) return feeRow;
-  }
 
   if (expectedMethod) {
-    const methodRows = rows.filter((row) => row.paymentMethod === expectedMethod);
-    if (methodRows.length === 1) return methodRows[0];
+    const pricedRows = rows
+      .filter((row) => row.paymentMethod === expectedMethod && row.pricePaid !== 0);
 
-    const pricedRows = methodRows.filter((row) => row.pricePaid !== 0);
     if (pricedRows.length === 1) return pricedRows[0];
 
     if (!Number.isNaN(absAmount) && pricedRows.length > 1) {
@@ -632,11 +625,90 @@ function lookupSk(orderId, skLookup, amount, { paymentType, note } = {}) {
     }
 
     if (pricedRows.length > 0) return pricedRows[0];
-    if (methodRows.length > 0) return methodRows[0];
   }
 
   if (rows.length === 1) return rows[0];
   return rows[0];
+}
+
+function buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows = null) {
+  const existingKeys = new Set();
+  if (preparedSkRows) {
+    for (let i = 1; i < preparedSkRows.length; i += 1) {
+      const key = String(preparedSkRows[i][SK_LOOKUP_KEY] ?? '').trim();
+      if (key) existingKeys.add(key);
+    }
+  }
+
+  const map = new Map();
+
+  for (let i = NC_HEADER_ROWS; i < ncRows.length; i += 1) {
+    const ncRow = ncRows[i];
+    if (isNcDateSeparatorRow(ncRow) || isNcSummaryRow(ncRow)) continue;
+
+    const paymentType = String(ncRow[NC_COL.PAYMENT_TYPE] ?? '').trim().toUpperCase();
+    if (paymentType !== 'STRIPE') continue;
+
+    const orderKey = extractOrderKey(formatNoteFromNc(ncRow[NC_COL.NOTE]));
+    const amt = parseNumber(ncRow[NC_COL.AMT]);
+    if (!orderKey || Number.isNaN(amt)) continue;
+
+    const absAmt = Math.abs(amt);
+    const key = `${orderKey}|${absAmt}`;
+    if (existingKeys.has(key) || map.has(key)) continue;
+
+    map.set(key, {
+      key,
+      price: absAmt,
+      method: 'Stripe',
+    });
+  }
+
+  return map;
+}
+
+function appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite) {
+  const existingKeys = new Set(
+    preparedSkRows.slice(1).map((row) => String(row[SK_LOOKUP_KEY] ?? '').trim()).filter(Boolean),
+  );
+
+  for (const entry of ncStripeComposite.values()) {
+    if (existingKeys.has(entry.key)) continue;
+    existingKeys.add(entry.key);
+
+    const newRow = new Array(SK_ORDERS_MIN_COLUMNS).fill('');
+    newRow[SK_LOOKUP_KEY] = entry.key;
+    newRow[SK_LOOKUP_PRICE] = entry.price;
+    newRow[SK_LOOKUP_METHOD] = entry.method;
+    preparedSkRows.push(newRow);
+  }
+}
+
+function lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite = null) {
+  const absAmount = Math.abs(parseNumber(rowAmount));
+  if (!Number.isNaN(absAmount) && ncStripeComposite) {
+    const composite = ncStripeComposite.get(`${String(orderKey ?? '').trim()}|${absAmount}`);
+    if (composite) return composite.price;
+  }
+
+  return skMatch?.pricePaid ?? null;
+}
+
+function lookupSkPaymentMethod(orderId, skLookup, amount, ncStripeComposite = null) {
+  const orderKey = String(orderId ?? '').trim();
+  const rows = skLookup.get(orderKey);
+  if (!rows?.length) return null;
+
+  const absAmount = Math.abs(parseNumber(amount));
+  if (!Number.isNaN(absAmount)) {
+    const amountMatch = rows.find((row) => Math.abs(row.pricePaid) === absAmount);
+    if (amountMatch?.paymentMethod) return amountMatch.paymentMethod;
+
+    const composite = ncStripeComposite?.get(`${orderKey}|${absAmount}`);
+    if (composite?.method) return composite.method;
+  }
+
+  return rows[0]?.paymentMethod ?? null;
 }
 
 function buildOrdersLookupRange(ordersLastRow) {
@@ -756,6 +828,7 @@ function updateFormulaRow(
   usageTracker,
   expansion = null,
   ordersLookup = null,
+  ncStripeComposite = null,
 ) {
   const note = expansion?.note ?? formatNoteFromNc(ncRow[NC_COL.NOTE]);
   const orderKey = expansion?.orderKey ?? extractOrderKey(note);
@@ -784,7 +857,7 @@ function updateFormulaRow(
   let hValue = null;
   if (pattern.hasH) {
     if (useFormulas && pattern.hFormula && ordersLookup && shouldWriteLookupFormula(skMatch)) {
-      hValue = skMatch?.pricePaid ?? null;
+      hValue = lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite);
       if (hValue != null && Number.isNaN(hValue)) hValue = null;
       setCell(sheet, `H${excelRow}`, {
         f: skLookupFormula(excelRow, ordersLookup, 'price'),
@@ -792,7 +865,7 @@ function updateFormulaRow(
         t: 'n',
       });
     } else if (pattern.hFormula || skMatch) {
-      hValue = skMatch?.pricePaid ?? null;
+      hValue = lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite);
       if (hValue != null && Number.isNaN(hValue)) hValue = null;
       setCell(sheet, `H${excelRow}`, hValue);
     } else if (pattern.hValue != null) {
@@ -813,18 +886,21 @@ function updateFormulaRow(
         setCell(sheet, `I${excelRow}`, diff);
       }
     }
+  }
 
-    if (pattern.hasJ) {
-      const paymentMethod = skMatch?.paymentMethod ?? null;
-      if (useFormulas && pattern.hasJ && ordersLookup && shouldWriteLookupFormula(skMatch)) {
-        setCell(sheet, `J${excelRow}`, {
-          f: skLookupFormula(excelRow, ordersLookup, 'method'),
-          v: paymentMethod,
-          t: 's',
-        });
-      } else {
-        setCell(sheet, `J${excelRow}`, paymentMethod);
-      }
+  if (pattern.hasJ) {
+    const paymentMethod =
+      lookupSkPaymentMethod(orderKey, skLookup, rowAmount, ncStripeComposite)
+      ?? skMatch?.paymentMethod
+      ?? null;
+    if (useFormulas && ordersLookup) {
+      setCell(sheet, `J${excelRow}`, {
+        f: skLookupFormula(excelRow, ordersLookup, 'method'),
+        v: paymentMethod ?? '',
+        t: 's',
+      });
+    } else if (paymentMethod != null) {
+      setCell(sheet, `J${excelRow}`, paymentMethod);
     }
   }
 
@@ -914,7 +990,7 @@ function buildMainSheetFromNcRows(
   skLookup,
   listingDate,
   valuesOnly,
-  { headerRows, headerSource } = {},
+  { headerRows, headerSource, ncStripeComposite = null } = {},
 ) {
   const sheet = {};
 
@@ -963,6 +1039,7 @@ function buildMainSheetFromNcRows(
         usageTracker,
         expansion,
         ordersLookup,
+        ncStripeComposite,
       );
       generated += 1;
     }
@@ -989,14 +1066,18 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
   let skSheetName;
   let skLookup;
   let preparedSkRows = null;
+  let ncStripeComposite = null;
 
   if (valuesOnly) {
     ({ lookup: skLookup, sheetName: skSheetName } = buildProductionSkLookup(skBuffer));
+    ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup);
   } else {
     const skData = readSheetRows(skBuffer, /orders/i, { cellFormula: true });
     skSheetName = skData.sheetName;
     preparedSkRows = prepareOrdersRowsForLookup(skData.rows);
     skLookup = buildSkLookup(preparedSkRows);
+    ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows);
+    appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite);
   }
 
   let mainSheet;
@@ -1015,7 +1096,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
       skLookup,
       listingDate,
       valuesOnly,
-      { headerRows: meta.headerRows },
+      { headerRows: meta.headerRows, ncStripeComposite },
     ));
   } else {
     const template = loadTemplateWorkbook();
@@ -1031,7 +1112,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
       skLookup,
       listingDate,
       false,
-      { headerSource: templateMain },
+      { headerSource: templateMain, ncStripeComposite },
     ));
   }
 
