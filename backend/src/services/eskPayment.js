@@ -631,6 +631,11 @@ function lookupSk(orderId, skLookup, amount, { paymentType, note } = {}) {
   return rows[0];
 }
 
+function hasSkStripePricedRow(orderKey, skLookup) {
+  const rows = skLookup.get(String(orderKey ?? '').trim()) || [];
+  return rows.some((row) => row.paymentMethod === 'Stripe' && row.pricePaid !== 0);
+}
+
 function buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows = null) {
   const existingKeys = new Set();
   if (preparedSkRows) {
@@ -656,6 +661,7 @@ function buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows = null) {
     const absAmt = Math.abs(amt);
     const key = `${orderKey}|${absAmt}`;
     if (existingKeys.has(key) || map.has(key)) continue;
+    if (hasSkStripePricedRow(orderKey, skLookup)) continue;
 
     map.set(key, {
       key,
@@ -685,7 +691,12 @@ function appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite) {
 }
 
 function lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite = null) {
-  const absAmount = Math.abs(parseNumber(rowAmount));
+  if (skMatch?.pricePaid === 0) return 0;
+
+  const parsedAmount = parseNumber(rowAmount);
+  if (!Number.isNaN(parsedAmount) && parsedAmount < 0) return 0;
+
+  const absAmount = Math.abs(parsedAmount);
   if (!Number.isNaN(absAmount) && ncStripeComposite) {
     const composite = ncStripeComposite.get(`${String(orderKey ?? '').trim()}|${absAmount}`);
     if (composite) return composite.price;
