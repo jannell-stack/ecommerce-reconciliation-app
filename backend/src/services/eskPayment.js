@@ -690,19 +690,19 @@ function appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite) {
   }
 }
 
-function lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite = null) {
-  if (skMatch?.pricePaid === 0) return 0;
+function resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite = null) {
+  const orderRows = skLookup.get(String(orderKey ?? '').trim()) || [];
+  const absAmount = Math.abs(parseNumber(rowAmount));
 
-  const parsedAmount = parseNumber(rowAmount);
-  if (!Number.isNaN(parsedAmount) && parsedAmount < 0) return 0;
+  if (!Number.isNaN(absAmount)) {
+    const amountMatch = orderRows.find((row) => Math.abs(row.pricePaid) === absAmount);
+    if (amountMatch) return amountMatch.pricePaid;
 
-  const absAmount = Math.abs(parsedAmount);
-  if (!Number.isNaN(absAmount) && ncStripeComposite) {
-    const composite = ncStripeComposite.get(`${String(orderKey ?? '').trim()}|${absAmount}`);
+    const composite = ncStripeComposite?.get(`${String(orderKey ?? '').trim()}|${absAmount}`);
     if (composite) return composite.price;
   }
 
-  return skMatch?.pricePaid ?? null;
+  return orderRows[0]?.pricePaid ?? null;
 }
 
 function lookupSkPaymentMethod(orderId, skLookup, amount, ncStripeComposite = null) {
@@ -740,11 +740,6 @@ function skLookupFormula(excelRow, ordersLookup, field) {
   ].join('');
   const orderLookup = `VLOOKUP($A${excelRow},${ordersLookup.fullRange},${fallbackColumn},FALSE)`;
   return `IFERROR(${compositeLookup},${orderLookup})`;
-}
-
-function shouldWriteLookupFormula(skMatch) {
-  if (!skMatch) return false;
-  return skMatch.pricePaid !== 0;
 }
 
 function loadTemplateWorkbook() {
@@ -867,16 +862,16 @@ function updateFormulaRow(
 
   let hValue = null;
   if (pattern.hasH) {
-    if (useFormulas && pattern.hFormula && ordersLookup && shouldWriteLookupFormula(skMatch)) {
-      hValue = lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite);
+    if (useFormulas && pattern.hFormula && ordersLookup) {
+      hValue = resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite);
       if (hValue != null && Number.isNaN(hValue)) hValue = null;
       setCell(sheet, `H${excelRow}`, {
         f: skLookupFormula(excelRow, ordersLookup, 'price'),
-        v: hValue,
+        v: hValue ?? 0,
         t: 'n',
       });
     } else if (pattern.hFormula || skMatch) {
-      hValue = lookupSkCompositePrice(orderKey, rowAmount, skMatch, ncStripeComposite);
+      hValue = resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite);
       if (hValue != null && Number.isNaN(hValue)) hValue = null;
       setCell(sheet, `H${excelRow}`, hValue);
     } else if (pattern.hValue != null) {
@@ -884,9 +879,9 @@ function updateFormulaRow(
       setCell(sheet, `H${excelRow}`, { v: hValue, t: 'n' });
     }
 
-    if (pattern.hasI && hValue != null) {
+    if (pattern.hasI) {
       const amount = parseNumber(rowAmount);
-      const diff = !Number.isNaN(amount) ? amount - hValue : null;
+      const diff = !Number.isNaN(amount) ? amount - (hValue ?? 0) : null;
       if (useFormulas) {
         setCell(sheet, `I${excelRow}`, {
           f: `F${excelRow}-H${excelRow}`,
