@@ -87,10 +87,22 @@ function formatNoteFromNc(ncNote) {
   let body = String(ncNote ?? '').trim();
   if (!body) return '';
   body = body.replace(/^Note:\s*/i, '').trim();
+  body = body.replace(/^Order\s*#\s*/i, '').trim();
   body = body.replace(/^[A-Za-z]{1,3}\s*#?\s*/i, '').trim();
   if (body.startsWith('#')) body = body.slice(1).trim();
   body = body.replace(/^-\s*,/, ',');
+
+  const orderMatch = body.match(/(\d{6}-\d{5,6})/);
+  if (orderMatch && !body.startsWith(orderMatch[1])) {
+    const orderIndex = body.indexOf(orderMatch[1]);
+    if (orderIndex > 0) body = body.slice(orderIndex);
+  }
+
   return body;
+}
+
+function columnAFormula(excelRow) {
+  return `LEFT(G${excelRow},13)`;
 }
 
 function ncHolderValue(holder) {
@@ -284,7 +296,7 @@ function applyBlankSpacerRow(sheet, excelRow, valuesOnly) {
   if (valuesOnly) {
     setCell(sheet, `A${excelRow}`, '');
   } else {
-    setCell(sheet, `A${excelRow}`, { f: `LEFT(G${excelRow},13)`, v: '', t: 's' });
+    setCell(sheet, `A${excelRow}`, { f: columnAFormula(excelRow), v: '', t: 's' });
   }
   setCell(sheet, `B${excelRow}`, ' ');
   for (const column of ['C', 'D', 'E', 'F']) {
@@ -296,7 +308,7 @@ function applyDateSpacerRow(sheet, excelRow, dateSerial, valuesOnly) {
   if (valuesOnly) {
     setCell(sheet, `A${excelRow}`, '');
   } else {
-    setCell(sheet, `A${excelRow}`, { f: `LEFT(G${excelRow},13)`, v: '', t: 's' });
+    setCell(sheet, `A${excelRow}`, { f: columnAFormula(excelRow), v: '', t: 's' });
   }
   setDateCell(sheet, `B${excelRow}`, dateSerial);
   for (const column of ['C', 'D', 'E', 'F']) {
@@ -849,7 +861,7 @@ function updateFormulaRow(
   if (valuesOnly) {
     setCell(sheet, `A${excelRow}`, orderKey);
   } else {
-    setCell(sheet, `A${excelRow}`, { f: `LEFT(G${excelRow},13)`, v: orderKey, t: 's' });
+    setCell(sheet, `A${excelRow}`, { f: columnAFormula(excelRow), v: orderKey, t: 's' });
   }
   setCell(sheet, `B${excelRow}`, ncHolderValue(ncRow[NC_COL.HOLDER]));
   setCell(sheet, `C${excelRow}`, docNo);
