@@ -30,6 +30,9 @@ function isReadableOrderId(value) {
 }
 import './Dashboard.css';
 
+/** Set to true to show the AI insights panel and fetch /api/insights. */
+const SHOW_AI_INSIGHTS = false;
+
 const SAMPLE_ORDERS = [
   { order_id: 'ORD-1001', amount: 49.99 },
   { order_id: 'ORD-1002', amount: 120.0 },
@@ -285,6 +288,7 @@ export default function Dashboard() {
   const issueCount = useMemo(() => unmatched.length, [unmatched]);
 
   const loadInsights = useCallback(async () => {
+    if (!SHOW_AI_INSIGHTS) return;
     setInsightsLoading(true);
     setInsightsError(null);
     try {
@@ -307,7 +311,7 @@ export default function Dashboard() {
         ...(data.unmatched || []),
         ...(data.exception || []),
       ];
-      if (issues.length > 0) {
+      if (SHOW_AI_INSIGHTS && issues.length > 0) {
         setInsightsLoading(true);
         try {
           const insightData = await fetchInsights();
@@ -585,7 +589,7 @@ export default function Dashboard() {
           </span>
         </div>
         <div className="toolbar__group toolbar__group--excel">
-          <span className="toolbar__label">Order.xlsx</span>
+          <span className="toolbar__label">ESK.xlsx</span>
           <div className="toolbar__actions">
             <label className="file-btn btn-integration">
               Import ESK
@@ -833,13 +837,15 @@ export default function Dashboard() {
 
       {summary && <SummaryCards summary={summary} />}
 
-      <InsightsPanel
-        insights={insights}
-        loading={insightsLoading}
-        error={insightsError}
-        issueCount={issueCount}
-        onRefresh={loadInsights}
-      />
+      {SHOW_AI_INSIGHTS && (
+        <InsightsPanel
+          insights={insights}
+          loading={insightsLoading}
+          error={insightsError}
+          issueCount={issueCount}
+          onRefresh={loadInsights}
+        />
+      )}
 
       <section className="results">
         <div className="results__toolbar">
