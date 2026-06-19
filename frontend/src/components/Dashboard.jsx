@@ -630,7 +630,7 @@ export default function Dashboard() {
             </button>
           </div>
           <span className="toolbar__hint">
-            Col A = Order ID, F = AMT, H = Paid, E = STRIPE
+            Col A = Order ID, F = AMT, H = Paid, E = STRIPE — Payment Listing sheet (e.g. ESK-Payment Listing.xlsx)
           </span>
         </div>
         <div className="toolbar__group toolbar__group--excel">

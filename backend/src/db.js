@@ -10,6 +10,9 @@ if (!fs.existsSync(dataDir)) {
 const dbPath = path.join(dataDir, 'reconciliation.db');
 const db = new Database(dbPath);
 
+db.pragma('journal_mode = WAL');
+db.pragma('synchronous = NORMAL');
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

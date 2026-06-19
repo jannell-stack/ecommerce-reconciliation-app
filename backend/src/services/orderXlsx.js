@@ -13,6 +13,14 @@ const COL = {
 
 const DATA_START_ROW = 2;
 
+const XLSX_READ_OPTS = {
+  cellStyles: false,
+  cellFormula: false,
+  cellHTML: false,
+  cellNF: false,
+  dense: true,
+};
+
 function normalizePaymentType(value) {
   return String(value ?? '')
     .trim()
@@ -25,25 +33,42 @@ function parseNumber(value) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function cellValue(cell) {
+  if (cell == null || cell === '') return '';
+  if (typeof cell === 'object' && 'v' in cell) return cell.v;
+  return cell;
+}
+
 function lineRefFromRow(row, excelRowNumber) {
-  const docNo = String(row[COL.DOC_NO] ?? '').trim();
+  const docNo = String(cellValue(row[COL.DOC_NO]) ?? '').trim();
   return docNo || `row-${excelRowNumber}`;
 }
 
+function resolveTargetSheet(buffer, sheetName) {
+  const probe = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
+  if (sheetName && probe.SheetNames.includes(sheetName)) {
+    return sheetName;
+  }
+  return (
+    probe.SheetNames.find((name) => /payment listing/i.test(name)) ||
+    probe.SheetNames[0]
+  );
+}
+
 function parseOrderXlsx(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
-  const targetSheet =
-    sheetName && workbook.SheetNames.includes(sheetName)
-      ? sheetName
-      : workbook.SheetNames.find((n) => /payment listing/i.test(n)) ||
-        workbook.SheetNames[0];
+  const targetSheet = resolveTargetSheet(buffer, sheetName);
+  const workbook = XLSX.read(buffer, {
+    type: 'buffer',
+    ...XLSX_READ_OPTS,
+    sheet: targetSheet,
+  });
 
   const sheet = workbook.Sheets[targetSheet];
   if (!sheet) {
     throw new Error('No worksheet found in Excel file');
   }
 
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const rows = Array.isArray(sheet) ? sheet : XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   const filterType = normalizePaymentType(paymentType);
 
   const orders = [];
@@ -56,15 +81,15 @@ function parseOrderXlsx(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
     if (!row?.length) continue;
 
     scanned += 1;
-    const rowPaymentType = normalizePaymentType(row[COL.PAYMENT_TYPE]);
+    const rowPaymentType = normalizePaymentType(cellValue(row[COL.PAYMENT_TYPE]));
     if (rowPaymentType !== filterType) continue;
 
-    const order_id = String(row[COL.ORDER_ID] ?? '').trim();
-    const orderAmount = parseNumber(row[COL.AMT]);
-    const paymentAmount = parseNumber(row[COL.FINAL_PAID]);
+    const order_id = String(cellValue(row[COL.ORDER_ID]) ?? '').trim();
+    const orderAmount = parseNumber(cellValue(row[COL.AMT]));
+    const paymentAmount = parseNumber(cellValue(row[COL.FINAL_PAID]));
     const line_ref = lineRefFromRow(row, i + 1);
-    const note = String(row[COL.NOTE] ?? '').trim();
-    const comment = String(row[COL.COMMENT] ?? '').trim();
+    const note = String(cellValue(row[COL.NOTE]) ?? '').trim();
+    const comment = String(cellValue(row[COL.COMMENT]) ?? '').trim();
 
     if (!isValidOrderId(order_id)) {
       skipped += 1;

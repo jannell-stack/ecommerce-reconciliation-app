@@ -12,34 +12,70 @@ const {
 } = require('../db/repository');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 function shouldReplace(req) {
   return req.body?.replace === true || req.query.replace === 'true';
 }
 
-router.post('/order-xlsx', upload.single('file'), (req, res) => {
+function handleUpload(fieldName) {
+  return (req, res, next) => {
+    upload.single(fieldName)(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File too large (max 50 MB)' });
+      }
+      return res.status(400).json({ error: err.message || 'Upload failed' });
+    });
+  };
+}
+
+router.post('/order-xlsx', handleUpload('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Excel file required (field: file)' });
   }
+
+  const startedAt = Date.now();
+  const memBefore = process.memoryUsage();
 
   try {
     const paymentType = req.query.paymentType || req.body?.paymentType || 'STRIPE';
     const sheetName = req.query.sheet || req.body?.sheet;
 
-    const parsed = parseOrderXlsx(req.file.buffer, { paymentType, sheetName });
+    console.info('[import/order-xlsx] start', {
+      fileMB: Math.round(req.file.buffer.length / 1024 / 1024),
+      paymentType,
+      replace: shouldReplace(req),
+    });
 
-    if (shouldReplace(req)) {
+    const parsed = parseOrderXlsx(req.file.buffer, { paymentType, sheetName });
+    const replaced = shouldReplace(req);
+
+    if (replaced) {
       clearOrders();
       clearPayments();
     }
 
     const ordersSynced = parsed.orders.length
-      ? insertOrders(parsed.orders, { dedupe: true })
+      ? insertOrders(parsed.orders, { dedupe: !replaced })
       : 0;
     const paymentsSynced = parsed.payments.length
-      ? insertPayments(parsed.payments, { dedupe: true })
+      ? insertPayments(parsed.payments, { dedupe: !replaced })
       : 0;
+
+    const memAfter = process.memoryUsage();
+    console.info('[import/order-xlsx] ok', {
+      ordersSynced,
+      paymentsSynced,
+      scanned: parsed.scanned,
+      skipped: parsed.skipped,
+      durationMs: Date.now() - startedAt,
+      heapUsedMB: Math.round(memAfter.heapUsed / 1024 / 1024),
+      heapDeltaMB: Math.round((memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024),
+    });
 
     res.json({
       message: `Imported ${ordersSynced} order(s) and ${paymentsSynced} payment(s) for ${parsed.paymentType}. Click "Run Reconciliation 1" to match.`,
@@ -59,10 +95,15 @@ router.post('/order-xlsx', upload.single('file'), (req, res) => {
       paymentsSynced,
       scanned: parsed.scanned,
       skipped: parsed.skipped,
-      replaced: shouldReplace(req),
+      replaced,
     });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error('[import/order-xlsx] failed', {
+      durationMs: Date.now() - startedAt,
+      message: err.message,
+      stack: err.stack,
+    });
+    res.status(500).json({ error: err.message || 'Failed to import ESK file' });
   }
 });
 
@@ -80,7 +121,7 @@ router.delete('/stripe-xlsx', (_req, res) => {
   });
 });
 
-router.post('/stripe-xlsx', upload.single('file'), (req, res) => {
+router.post('/stripe-xlsx', handleUpload('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Excel file required (field: file)' });
   }
