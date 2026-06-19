@@ -10,7 +10,7 @@ services:
       - key: DATA_DIR
         value: /app/backend/data
       - key: NODE_OPTIONS
-        value: --max-old-space-size=460
+        value: --max-old-space-size=1536
       - key: CRON_ENABLED
         value: "false"
       - key: SHOPIFY_STORE_DOMAIN

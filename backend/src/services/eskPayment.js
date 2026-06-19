@@ -754,17 +754,57 @@ function skLookupFormula(excelRow, ordersLookup, field) {
   return `IFERROR(${compositeLookup},${orderLookup})`;
 }
 
-function loadTemplateWorkbook() {
+function buildPreparedOrdersFromSkBuffer(skBuffer) {
+  const workbook = XLSX.read(skBuffer, { type: 'buffer', ...XLSX_READ_OPTS });
+  const sheetName = findSheet(workbook, /orders/i);
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet?.['!ref']) {
+    throw new Error('No Orders worksheet found in SK Combined file');
+  }
+
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const prepared = [];
+  const cellValue = (row, col) => sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+
+  const headerRow = new Array(SK_ORDERS_MIN_COLUMNS).fill('');
+  headerRow[SK_ORDER_ID] = cellValue(0, SK_ORDER_ID) ?? '';
+  headerRow[SK_ITEM_TYPE] = cellValue(0, SK_ITEM_TYPE) ?? '';
+  headerRow[SK_PRICE_PAID] = cellValue(0, SK_PRICE_PAID) ?? '';
+  headerRow[SK_PAYMENT_METHOD] = cellValue(0, SK_PAYMENT_METHOD) ?? '';
+  prepared.push(headerRow);
+
+  for (let row = 1; row <= range.e.r; row += 1) {
+    const orderRow = new Array(SK_ORDERS_MIN_COLUMNS).fill('');
+    orderRow[SK_ORDER_ID] = cellValue(row, SK_ORDER_ID) ?? '';
+    orderRow[SK_ITEM_TYPE] = cellValue(row, SK_ITEM_TYPE) ?? '';
+    orderRow[SK_PRICE_PAID] = cellValue(row, SK_PRICE_PAID) ?? '';
+    orderRow[SK_PAYMENT_METHOD] = cellValue(row, SK_PAYMENT_METHOD) ?? '';
+    prepared.push(orderRow);
+  }
+
+  return {
+    sheetName,
+    rows: prepareOrdersRowsForLookup(prepared),
+  };
+}
+
+function loadTemplateHeaderSheet() {
   if (!fs.existsSync(TEMPLATE_PATH)) {
     throw new Error('ESK payment template is missing. Expected backend/templates/ESK-Payment-template.xlsx');
   }
 
-  return XLSX.read(fs.readFileSync(TEMPLATE_PATH), {
+  const workbook = XLSX.read(fs.readFileSync(TEMPLATE_PATH), {
     type: 'buffer',
-    cellFormula: true,
-    cellStyles: true,
-    cellNF: true,
+    ...XLSX_READ_OPTS,
+    sheetRows: NC_HEADER_ROWS,
   });
+  const templateMainName = getTemplateMainSheetName(workbook);
+  const templateMain = workbook.Sheets[templateMainName];
+  if (!templateMain) {
+    throw new Error('ESK payment template main sheet is missing');
+  }
+
+  return { templateMainName, templateMain };
 }
 
 function loadProductionMeta() {
@@ -1090,9 +1130,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     ({ lookup: skLookup, sheetName: skSheetName } = buildProductionSkLookup(skBuffer));
     ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup);
   } else {
-    const skData = readSheetRows(skBuffer, /orders/i, { cellFormula: true });
-    skSheetName = skData.sheetName;
-    preparedSkRows = prepareOrdersRowsForLookup(skData.rows);
+    ({ sheetName: skSheetName, rows: preparedSkRows } = buildPreparedOrdersFromSkBuffer(skBuffer));
     skLookup = buildSkLookup(preparedSkRows);
     ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows);
     appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite);
@@ -1117,9 +1155,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
       { headerRows: meta.headerRows, ncStripeComposite },
     ));
   } else {
-    const template = loadTemplateWorkbook();
-    const templateMainName = getTemplateMainSheetName(template);
-    const templateMain = template.Sheets[templateMainName];
+    const { templateMainName, templateMain } = loadTemplateHeaderSheet();
     sheetTitle = listingDate
       ? `Payment Listing-${listingDate.sheetLabel}`
       : templateMainName;
@@ -1155,6 +1191,8 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     cellFormula: !valuesOnly,
   });
   if (!valuesOnly) {
+    preparedSkRows = null;
+    mainSheet = null;
     buffer = await applyColumnBDateStyles(buffer);
   }
   const filename = `ESK-Payment Listing${listingDate ? `-${listingDate.sheetLabel}` : ''}.xlsx`;

@@ -1,10 +1,18 @@
 const API_BASE = '/api';
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, options);
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, options);
+  } catch (err) {
+    throw new Error(err.message || 'Network error — the server may be restarting. Try again in a moment.');
+  }
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || res.statusText || 'Request failed');
+    throw new Error(
+      data.error || res.statusText || `Request failed (${res.status})`
+    );
   }
   return data;
 }
@@ -14,7 +22,11 @@ export function fetchReconciliation() {
 }
 
 export function runReconciliation() {
-  return request('/reconcile', { method: 'POST' });
+  return request('/reconcile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
 }
 
 export function fetchReconciliation2() {
@@ -22,7 +34,11 @@ export function fetchReconciliation2() {
 }
 
 export function runReconciliation2() {
-  return request('/reconcile/2', { method: 'POST' });
+  return request('/reconcile/2', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
 }
 
 export function syncOrders(orders) {

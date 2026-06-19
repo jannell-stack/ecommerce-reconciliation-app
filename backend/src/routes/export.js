@@ -57,6 +57,12 @@ router.post(
     const startedAt = Date.now();
     const memBefore = process.memoryUsage();
 
+    console.info('[esk-payment] start', {
+      skMB: Math.round(skFile.buffer.length / 1024 / 1024),
+      ncMB: Math.round(ncFile.buffer.length / 1024 / 1024),
+      heapLimitMB: Math.round((require('v8').getHeapStatistics().heap_size_limit) / 1024 / 1024),
+    });
+
     try {
       const result = await createEskPaymentWorkbook(skFile.buffer, ncFile.buffer);
       const memAfter = process.memoryUsage();

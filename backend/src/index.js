@@ -2,12 +2,16 @@ require('dotenv').config();
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
-  process.exit(1);
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
-  process.exit(1);
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
 });
 
 const path = require('path');
@@ -76,6 +80,10 @@ if (isProduction) {
     });
   });
 }
+
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'API route not found' });
+});
 
 app.use((err, _req, res, _next) => {
   console.error(err);
