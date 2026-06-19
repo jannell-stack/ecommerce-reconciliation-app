@@ -779,7 +779,7 @@ function loadProductionMeta() {
 }
 
 function useValuesOnlyOutput() {
-  return process.env.ESK_VALUES_ONLY === 'true' || process.env.NODE_ENV === 'production';
+  return process.env.ESK_VALUES_ONLY === 'true';
 }
 
 function getTemplateMainSheetName(workbook) {
@@ -1167,6 +1167,7 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     skipped: ncMap.size - generated,
     skSheetName,
     ncSheetName,
+    valuesOnly,
   };
 }
 

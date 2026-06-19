@@ -62,6 +62,7 @@ router.post(
       const memAfter = process.memoryUsage();
       console.info('[esk-payment] ok', {
         generated: result.generated,
+        valuesOnly: result.valuesOnly,
         durationMs: Date.now() - startedAt,
         heapUsedMB: Math.round(memAfter.heapUsed / 1024 / 1024),
         heapDeltaMB: Math.round((memAfter.heapUsed - memBefore.heapUsed) / 1024 / 1024),
