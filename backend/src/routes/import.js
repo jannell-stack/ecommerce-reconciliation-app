@@ -33,7 +33,7 @@ function handleUpload(fieldName) {
   };
 }
 
-router.post('/order-xlsx', handleUpload('file'), (req, res) => {
+router.post('/order-xlsx', handleUpload('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Excel file required (field: file)' });
   }
@@ -51,7 +51,7 @@ router.post('/order-xlsx', handleUpload('file'), (req, res) => {
       replace: shouldReplace(req),
     });
 
-    const parsed = parseOrderXlsx(req.file.buffer, { paymentType, sheetName });
+    const parsed = await parseOrderXlsx(req.file.buffer, { paymentType, sheetName });
     const replaced = shouldReplace(req);
 
     if (replaced) {
@@ -68,6 +68,7 @@ router.post('/order-xlsx', handleUpload('file'), (req, res) => {
 
     const memAfter = process.memoryUsage();
     console.info('[import/order-xlsx] ok', {
+      parser: parsed.parser,
       ordersSynced,
       paymentsSynced,
       scanned: parsed.scanned,

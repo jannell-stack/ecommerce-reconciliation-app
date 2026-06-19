@@ -2,7 +2,7 @@ services:
   - type: web
     name: ecommerce-reconciliation
     runtime: docker
-    plan: free
+    plan: standard
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV

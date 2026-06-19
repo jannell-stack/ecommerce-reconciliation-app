@@ -1,5 +1,6 @@
 const XLSX = require('xlsx');
 const { isValidOrderId } = require('../utils/csvParser');
+const { parseOrderXlsxZip } = require('./orderXlsxZip');
 
 const COL = {
   ORDER_ID: 0,
@@ -20,6 +21,10 @@ const XLSX_READ_OPTS = {
   cellNF: false,
   dense: true,
 };
+
+function isZipXlsx(buffer) {
+  return buffer?.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+}
 
 function normalizePaymentType(value) {
   return String(value ?? '')
@@ -55,7 +60,7 @@ function resolveTargetSheet(buffer, sheetName) {
   );
 }
 
-function parseOrderXlsx(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
+function parseOrderXlsxLegacy(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
   const targetSheet = resolveTargetSheet(buffer, sheetName);
   const workbook = XLSX.read(buffer, {
     type: 'buffer',
@@ -68,7 +73,9 @@ function parseOrderXlsx(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
     throw new Error('No worksheet found in Excel file');
   }
 
-  const rows = Array.isArray(sheet) ? sheet : XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const rows = Array.isArray(sheet)
+    ? sheet
+    : XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   const filterType = normalizePaymentType(paymentType);
 
   const orders = [];
@@ -96,7 +103,6 @@ function parseOrderXlsx(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
       continue;
     }
 
-    // Reconcile column F and H on the same Excel row (linked by DOC.NO / line_ref).
     if (!Number.isNaN(orderAmount)) {
       orders.push({
         order_id,
@@ -131,7 +137,15 @@ function parseOrderXlsx(buffer, { paymentType = 'STRIPE', sheetName } = {}) {
     payments,
     scanned,
     skipped,
+    parser: 'xlsx',
   };
+}
+
+async function parseOrderXlsx(buffer, options = {}) {
+  if (isZipXlsx(buffer)) {
+    return parseOrderXlsxZip(buffer, options);
+  }
+  return parseOrderXlsxLegacy(buffer, options);
 }
 
 module.exports = {
