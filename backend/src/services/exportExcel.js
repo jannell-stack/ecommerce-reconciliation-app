@@ -5,6 +5,21 @@ const { runReconciliation2 } = require('./reconciliation2');
 const { amountsEqual } = require('./reconciliation');
 const { orderColAMatchKey, stripeColDValue } = require('../utils/matchKey');
 
+const MALAYSIA_TIME_ZONE = 'Asia/Kuala_Lumpur';
+
+function formatGeneratedAtMalaysia() {
+  return new Date().toLocaleString('en-MY', {
+    timeZone: MALAYSIA_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
 function buildMetadataIndex() {
   const index = new Map();
   const rows = db
@@ -40,8 +55,8 @@ function enrichRow(row, metaIndex) {
 function baseExportFields(row) {
   return {
     'Order ID': row.orderId,
-    'Order Amount': row.orderAmount ?? row.amount ?? '',
-    'Payment Amount': row.paymentAmount ?? '',
+    'Col F Amount': row.orderAmount ?? row.amount ?? '',
+    'Col H Amount': row.paymentAmount ?? '',
     Note: row.note ?? '',
     Comment: row.comment ?? '',
     'Doc No': row.lineRef ?? '',
@@ -71,8 +86,8 @@ function exceptionRowToExport(row) {
 
 const STANDARD_HEADERS = [
   'Order ID',
-  'Order Amount',
-  'Payment Amount',
+  'Col F Amount',
+  'Col H Amount',
   'Note',
   'Comment',
   'Doc No',
@@ -102,7 +117,7 @@ function buildSummarySheet(summary, metaCount, { title, matchRule } = {}) {
 
   const rows = [
     [title || 'Reconciliation Summary', ''],
-    ['Generated at', new Date().toISOString()],
+    ['Generated at', formatGeneratedAtMalaysia()],
     ['', ''],
     ['Total orders', summary.totalOrders],
     ['Total payments', summary.totalPayments],
@@ -186,10 +201,13 @@ function exportReconciliationBuffer() {
   };
 }
 
+const RECON2_ESK_COL_A = 'ESK Column A';
+const RECON2_ESK_COL_F = 'ESK Column F';
+
 const RECON2_HEADERS = [
-  'Order Col A (first 6)',
+  RECON2_ESK_COL_A,
   'Stripe Col D',
-  'Order Col F',
+  RECON2_ESK_COL_F,
   'Stripe Col F',
 ];
 
@@ -254,11 +272,11 @@ function recon2ExportRow(row, stripeLookup, stripeByKey) {
   const stripeRow = resolveStripeRowForExport(row, stripeLookup, stripeByKey);
 
   return {
-    'Order Col A (first 6)': isStripeOnly
+    [RECON2_ESK_COL_A]: isStripeOnly
       ? ''
       : orderColAMatchKey(row.orderId),
     'Stripe Col D': stripeRow ? exportStripeColD(stripeRow) : '',
-    'Order Col F': isStripeOnly ? '' : (row.orderAmount ?? row.amount ?? ''),
+    [RECON2_ESK_COL_F]: isStripeOnly ? '' : (row.orderAmount ?? row.amount ?? ''),
     'Stripe Col F': stripeRow
       ? stripeRow.amount
       : isStripeOnly
@@ -275,27 +293,27 @@ function buildRecon2SummarySheet(summary) {
 
   return [
     ['Reconciliation 2 Summary', ''],
-    ['Generated at', new Date().toISOString()],
+    ['Generated at', formatGeneratedAtMalaysia()],
     ['', ''],
     [
       'Match rule',
-      'Order col A (first 6 chars) → Stripe col D; amounts Order col F vs Stripe col F',
+      'ESK Column A (first 6 chars) → Stripe col D; amounts ESK Column F vs Stripe col F',
     ],
-    ['Total orders', summary.totalOrders],
+    ['Total ESK', summary.totalOrders],
     ['Total Stripe rows', summary.totalPayments],
     ['Matched', summary.matchedCount],
     ['Matched %', `${matchedPct}%`],
     ['Unmatched', summary.unmatchedCount],
     ['Exceptions', summary.exceptionCount],
     ['', ''],
-    ['Export columns', 'Order Col A (first 6), Stripe Col D, Order Col F, Stripe Col F'],
+    ['Export columns', 'ESK Column A, Stripe Col D, ESK Column F, Stripe Col F'],
     [
       'Unmatched rule',
-      'Unmatched: no Stripe col D, or no Order col A (orphan Stripe rows)',
+      'Unmatched: no Stripe col D, or no ESK Column A (orphan Stripe rows)',
     ],
     [
       'Exceptions rule',
-      'Exceptions: Order col A and Stripe col D present but Order col F ≠ Stripe col F',
+      'Exceptions: ESK Column A and Stripe col D present but ESK Column F ≠ Stripe col F',
     ],
   ];
 }
@@ -305,11 +323,11 @@ function exportRowTallies(exportRow) {
     return false;
   }
 
-  const orderKey = String(exportRow['Order Col A (first 6)']).trim();
+  const orderKey = String(exportRow[RECON2_ESK_COL_A]).trim();
   const stripeD = stripeColDValue(exportRow['Stripe Col D']);
   if (!orderKey || !stripeD || orderKey !== stripeD) return false;
 
-  const orderF = exportRow['Order Col F'];
+  const orderF = exportRow[RECON2_ESK_COL_F];
   const stripeF = exportRow['Stripe Col F'];
   if (orderF === '' || orderF == null || stripeF === '' || stripeF == null) {
     return false;
@@ -324,7 +342,7 @@ function isExportStripeColDEmpty(exportRow) {
 }
 
 function isExportOrderColAEmpty(exportRow) {
-  const value = exportRow['Order Col A (first 6)'];
+  const value = exportRow[RECON2_ESK_COL_A];
   return value === '' || value == null;
 }
 

@@ -376,6 +376,28 @@ export default function Dashboard() {
     }
   }
 
+  async function handleReconciliation1() {
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const data = await runReconciliation();
+      applyData(setters, data);
+      setMessage(data.message || 'Reconciliation complete');
+      const issues = [
+        ...(data.unmatched || []),
+        ...(data.exception || []),
+      ];
+      if (issues.length > 0) await loadInsights();
+      else setInsights(null);
+      await loadDataHealth();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleReconciliation2() {
     setLoading(true);
     setError(null);
@@ -440,12 +462,7 @@ export default function Dashboard() {
             type="button"
             className="btn-export"
             disabled={loading}
-            onClick={() =>
-              handleAction(async () => {
-                const r = await runReconciliation();
-                setMessage(r.message);
-              })
-            }
+            onClick={handleReconciliation1}
           >
             {loading ? 'Running…' : 'Run Reconciliation 1'}
           </button>
@@ -580,15 +597,16 @@ export default function Dashboard() {
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  handleAction(async () => {
-                    const r = await importOrderXlsx(file, {
-                      paymentType: 'STRIPE',
-                      replace: true,
-                    });
-                    setMessage(
-                      `${r.message} — Matched: ${r.reconciliation.matched}, Exceptions: ${r.reconciliation.exception}, Unmatched: ${r.reconciliation.unmatched}`
-                    );
-                  });
+                  handleAction(
+                    async () => {
+                      const r = await importOrderXlsx(file, {
+                        paymentType: 'STRIPE',
+                        replace: true,
+                      });
+                      setMessage(r.message);
+                    },
+                    { runReconcile: false }
+                  );
                   e.target.value = '';
                 }}
               />

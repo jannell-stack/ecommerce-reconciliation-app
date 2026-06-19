@@ -10,7 +10,6 @@ const {
   insertStripePayments,
   clearStripePayments,
 } = require('../db/repository');
-const { runReconciliation } = require('../services/reconciliation');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -42,10 +41,8 @@ router.post('/order-xlsx', upload.single('file'), (req, res) => {
       ? insertPayments(parsed.payments, { dedupe: true })
       : 0;
 
-    const reconciliation = runReconciliation();
-
     res.json({
-      message: `Imported ${ordersSynced} order(s) and ${paymentsSynced} payment(s) for ${parsed.paymentType}`,
+      message: `Imported ${ordersSynced} order(s) and ${paymentsSynced} payment(s) for ${parsed.paymentType}. Click "Run Reconciliation 1" to match.`,
       source: 'order-xlsx',
       sheetName: parsed.sheetName,
       paymentType: parsed.paymentType,
@@ -63,12 +60,6 @@ router.post('/order-xlsx', upload.single('file'), (req, res) => {
       scanned: parsed.scanned,
       skipped: parsed.skipped,
       replaced: shouldReplace(req),
-      reconciliation: {
-        summary: reconciliation.summary,
-        matched: reconciliation.matched.length,
-        unmatched: reconciliation.unmatched.length,
-        exception: reconciliation.exception.length,
-      },
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
