@@ -81,14 +81,19 @@ function buildUnmatchedPaymentRecord(payment) {
   };
 }
 
+function recordDedupKey(record) {
+  if (record.orderRecordId != null) return `order:${record.orderRecordId}`;
+  if (record.paymentRecordId != null) return `payment:${record.paymentRecordId}`;
+  if (record.lineRef) return `line:${record.lineRef}`;
+  return `orderId:${record.orderId}`;
+}
+
 function deduplicateRecords(records) {
   const seen = new Set();
   const unique = [];
 
   for (const record of records) {
-    const key = record.lineRef
-      ? String(record.lineRef)
-      : String(record.orderId);
+    const key = recordDedupKey(record);
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(record);
@@ -163,6 +168,7 @@ module.exports = {
   runReconciliation,
   amountsEqual,
   deduplicateRecords,
+  recordDedupKey,
   belongsToSameLine,
   STATUS,
 };
