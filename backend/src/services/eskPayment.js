@@ -206,21 +206,6 @@ function expandNcRow(ncRow, skLookup) {
   const singleOrderId = orderIds[0] || defaultExpansion.orderKey;
   const pricedRows = getSkPricedRows(singleOrderId, skLookup);
   const skSum = pricedRows.reduce((sum, row) => sum + row.pricePaid, 0);
-  const topUpAmount = extractTopUpAmount(formattedNote);
-
-  if (
-    orderIds.length === 1
-    && Number.isFinite(topUpAmount)
-    && topUpAmount > 0
-    && ncAmt > topUpAmount
-    && pricedRows.length >= 2
-    && ncAmt > skSum + 0.01
-  ) {
-    return [
-      { ncRow, orderKey: singleOrderId, note: formattedNote, amount: ncAmt - topUpAmount },
-      { ncRow, orderKey: singleOrderId, note: formattedNote, amount: topUpAmount },
-    ];
-  }
 
   if (
     orderIds.length === 1
