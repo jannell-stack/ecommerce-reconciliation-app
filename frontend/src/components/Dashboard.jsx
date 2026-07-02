@@ -25,13 +25,13 @@ import {
   createShopback,
   createStripeAdvice,
 } from '../api';
+import './Dashboard.css';
 
 const ORDER_ID_PATTERN = /^[A-Za-z0-9#._\-/ ]{1,64}$/;
 
 function isReadableOrderId(value) {
   return ORDER_ID_PATTERN.test(String(value ?? '').trim());
 }
-import './Dashboard.css';
 
 /** Set to true to show the AI insights panel and fetch /api/insights. */
 const SHOW_AI_INSIGHTS = false;
