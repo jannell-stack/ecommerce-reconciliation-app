@@ -21,6 +21,9 @@ import {
   downloadReconciliationExcel,
   downloadReconciliationExcel2,
   createEskPayment,
+  createGpay,
+  createShopback,
+  createStripeAdvice,
 } from '../api';
 
 const ORDER_ID_PATTERN = /^[A-Za-z0-9#._\-/ ]{1,64}$/;
@@ -279,6 +282,15 @@ export default function Dashboard() {
   const [eskSkFile, setEskSkFile] = useState(null);
   const [eskNcFile, setEskNcFile] = useState(null);
   const [eskCreating, setEskCreating] = useState(false);
+  const [stripeAdviceStripeFile, setStripeAdviceStripeFile] = useState(null);
+  const [stripeAdviceNcFiles, setStripeAdviceNcFiles] = useState([]);
+  const [stripeAdviceCreating, setStripeAdviceCreating] = useState(false);
+  const [gpayGrabFile, setGpayGrabFile] = useState(null);
+  const [gpayEskFiles, setGpayEskFiles] = useState([]);
+  const [gpayCreating, setGpayCreating] = useState(false);
+  const [shopbackTransactionFile, setShopbackTransactionFile] = useState(null);
+  const [shopbackEskFiles, setShopbackEskFiles] = useState([]);
+  const [shopbackCreating, setShopbackCreating] = useState(false);
 
   const setters = useMemo(
     () => ({ setMatched, setUnmatched, setSummary }),
@@ -526,9 +538,10 @@ export default function Dashboard() {
       <section className="toolbar">
         <div className="toolbar__group toolbar__group--excel toolbar__group--esk">
           <span className="toolbar__label">ESK Payment</span>
-          <div className="toolbar__actions toolbar__actions--stacked">
+          <div className="toolbar__action-rows">
+            <div className="toolbar__actions toolbar__actions--stacked">
             <label className="file-btn btn-integration">
-              SK Combined
+              SK Verification
               <input
                 type="file"
                 accept=".xlsx,.xls"
@@ -581,11 +594,294 @@ export default function Dashboard() {
             >
               {eskCreating ? 'Creating…' : 'Create ESK-Payment'}
             </button>
+            <label className="file-btn btn-integration">
+              Stripe Payout
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                hidden
+                disabled={loading || stripeAdviceCreating}
+                onChange={(e) => {
+                  setStripeAdviceStripeFile(e.target.files?.[0] || null);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            <label className="file-btn btn-integration">
+              ESK for Stripe
+              {stripeAdviceNcFiles.length > 0
+                ? ` (${stripeAdviceNcFiles.length})`
+                : ''}
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                multiple
+                hidden
+                disabled={loading || stripeAdviceCreating}
+                onChange={(e) => {
+                  const picked = Array.from(e.target.files || []);
+                  if (picked.length === 0) return;
+                  setStripeAdviceNcFiles((prev) => {
+                    const next = [...prev];
+                    for (const file of picked) {
+                      const duplicate = next.some(
+                        (existing) =>
+                          existing.name === file.name && existing.size === file.size,
+                      );
+                      if (!duplicate) next.push(file);
+                    }
+                    return next;
+                  });
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            {stripeAdviceNcFiles.length > 0 ? (
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={loading || stripeAdviceCreating}
+                onClick={() => setStripeAdviceNcFiles([])}
+              >
+                Clear NC
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn-primary btn-stripe-advice-create"
+              disabled={
+                loading
+                || stripeAdviceCreating
+                || !stripeAdviceStripeFile
+                || stripeAdviceNcFiles.length === 0
+              }
+              onClick={async () => {
+                setStripeAdviceCreating(true);
+                setError(null);
+                setMessage(null);
+                try {
+                  const result = await createStripeAdvice(
+                    stripeAdviceStripeFile,
+                    stripeAdviceNcFiles,
+                  );
+                  setMessage(
+                    `Created ${result.filename}${
+                      result.generated != null
+                        ? ` (${result.generated} row(s)`
+                        : ''
+                    }${
+                      result.linked != null ? `, ${result.linked} linked` : ''
+                    }${result.generated != null ? ')' : ''}`,
+                  );
+                  setStripeAdviceStripeFile(null);
+                  setStripeAdviceNcFiles([]);
+                } catch (err) {
+                  setError(err.message);
+                } finally {
+                  setStripeAdviceCreating(false);
+                }
+              }}
+            >
+              {stripeAdviceCreating ? 'Creating…' : 'Create Stripe Advice'}
+            </button>
+            </div>
+            <div className="toolbar__actions toolbar__actions--stacked">
+              <div className="toolbar__actions-segment">
+              <label className="file-btn btn-integration">
+                Grab Transaction
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  hidden
+                  disabled={loading || gpayCreating}
+                  onChange={(e) => {
+                    setGpayGrabFile(e.target.files?.[0] || null);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              <label className="file-btn btn-integration">
+                ESK for Grab
+                {gpayEskFiles.length > 0 ? ` (${gpayEskFiles.length})` : ''}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  multiple
+                  hidden
+                  disabled={loading || gpayCreating}
+                  onChange={(e) => {
+                    const picked = Array.from(e.target.files || []);
+                    if (picked.length === 0) return;
+                    setGpayEskFiles((prev) => {
+                      const next = [...prev];
+                      for (const file of picked) {
+                        const duplicate = next.some(
+                          (existing) =>
+                            existing.name === file.name && existing.size === file.size,
+                        );
+                        if (!duplicate) next.push(file);
+                      }
+                      return next;
+                    });
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              {gpayEskFiles.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  disabled={loading || gpayCreating}
+                  onClick={() => setGpayEskFiles([])}
+                >
+                  Clear ESK
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn-primary btn-gpay-create"
+                disabled={
+                  loading
+                  || gpayCreating
+                  || !gpayGrabFile
+                  || gpayEskFiles.length === 0
+                }
+                onClick={async () => {
+                  setGpayCreating(true);
+                  setError(null);
+                  setMessage(null);
+                  try {
+                    const result = await createGpay(gpayGrabFile, gpayEskFiles);
+                    setMessage(
+                      `Created ${result.filename}${
+                        result.generated != null
+                          ? ` (${result.generated} row(s)`
+                          : ''
+                      }${
+                        result.linked != null ? `, ${result.linked} linked` : ''
+                      }${result.generated != null ? ')' : ''}`,
+                    );
+                    setGpayGrabFile(null);
+                    setGpayEskFiles([]);
+                  } catch (err) {
+                    setError(err.message);
+                  } finally {
+                    setGpayCreating(false);
+                  }
+                }}
+              >
+                {gpayCreating ? 'Creating…' : 'Create GPay'}
+              </button>
+              </div>
+              <div className="toolbar__actions-segment toolbar__actions-segment--shopback">
+              <label className="file-btn btn-integration">
+                Shopback Transaction
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  hidden
+                  disabled={loading || shopbackCreating}
+                  onChange={(e) => {
+                    setShopbackTransactionFile(e.target.files?.[0] || null);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              <label className="file-btn btn-integration">
+                ESK for Shopback
+                {shopbackEskFiles.length > 0 ? ` (${shopbackEskFiles.length})` : ''}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  multiple
+                  hidden
+                  disabled={loading || shopbackCreating}
+                  onChange={(e) => {
+                    const picked = Array.from(e.target.files || []);
+                    if (picked.length === 0) return;
+                    setShopbackEskFiles((prev) => {
+                      const next = [...prev];
+                      for (const file of picked) {
+                        const duplicate = next.some(
+                          (existing) =>
+                            existing.name === file.name && existing.size === file.size,
+                        );
+                        if (!duplicate) next.push(file);
+                      }
+                      return next;
+                    });
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+              {shopbackEskFiles.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  disabled={loading || shopbackCreating}
+                  onClick={() => setShopbackEskFiles([])}
+                >
+                  Clear ESK
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn-primary btn-shopback-create"
+                disabled={
+                  loading
+                  || shopbackCreating
+                  || !shopbackTransactionFile
+                  || shopbackEskFiles.length === 0
+                }
+                onClick={async () => {
+                  setShopbackCreating(true);
+                  setError(null);
+                  setMessage(null);
+                  try {
+                    const result = await createShopback(
+                      shopbackTransactionFile,
+                      shopbackEskFiles,
+                    );
+                    setMessage(
+                      `Created ${result.filename}${
+                        result.generated != null
+                          ? ` (${result.generated} row(s)`
+                          : ''
+                      }${
+                        result.linked != null ? `, ${result.linked} linked` : ''
+                      }${result.generated != null ? ')' : ''}`,
+                    );
+                    setShopbackTransactionFile(null);
+                    setShopbackEskFiles([]);
+                  } catch (err) {
+                    setError(err.message);
+                  } finally {
+                    setShopbackCreating(false);
+                  }
+                }}
+              >
+                {shopbackCreating ? 'Creating…' : 'Create Shopback'}
+              </button>
+              </div>
+            </div>
           </div>
           <span className="toolbar__hint">
-            {eskSkFile || eskNcFile
-              ? `${eskSkFile?.name || 'SK file missing'} + ${eskNcFile?.name || 'NC file missing'}`
-              : 'SK Combined + NC Payment Listing → ESK-Payment Listing.xlsx'}
+            {eskSkFile || eskNcFile || stripeAdviceStripeFile || stripeAdviceNcFiles.length > 0
+              ? [
+                  eskSkFile || eskNcFile
+                    ? `${eskSkFile?.name || 'SK file missing'} + ${eskNcFile?.name || 'NC file missing'}`
+                    : null,
+                  stripeAdviceStripeFile || stripeAdviceNcFiles.length > 0
+                    ? `${stripeAdviceStripeFile?.name || 'Stripe file missing'} + ${
+                        stripeAdviceNcFiles.length > 0
+                          ? stripeAdviceNcFiles.map((file) => file.name).join(', ')
+                          : 'NC file(s) missing'
+                      }`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+              : 'SK + NC → ESK Payment Details · Stripe Itemized + ESK Payment Details (multi-file) → Stripe Advice'}
           </span>
         </div>
         <div className="toolbar__group toolbar__group--excel">

@@ -48,9 +48,7 @@ async function main() {
   const nc = fs.readFileSync(NC);
 
   for (const mode of ['dev', 'production']) {
-    delete process.env.ESK_VALUES_ONLY;
     delete process.env.NODE_ENV;
-    if (mode === 'production') process.env.ESK_VALUES_ONLY = 'true';
     delete require.cache[require.resolve('../src/services/eskPayment')];
     const { createEskPaymentWorkbook } = require('../src/services/eskPayment');
     const result = await createEskPaymentWorkbook(sk, nc);

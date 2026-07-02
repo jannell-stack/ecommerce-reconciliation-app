@@ -89,8 +89,40 @@
   flex-wrap: wrap;
 }
 
+.toolbar__action-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
 .btn-esk-create {
   min-width: 10.5rem;
+}
+
+.btn-stripe-advice-create {
+  min-width: 11.5rem;
+}
+
+.btn-gpay-create {
+  min-width: 9.5rem;
+}
+
+.btn-shopback-create {
+  min-width: 10.5rem;
+}
+
+.toolbar__actions-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.toolbar__actions-segment--shopback {
+  margin-left: 0.25rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border);
 }
 
 .toolbar__actions {

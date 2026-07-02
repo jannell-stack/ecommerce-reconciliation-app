@@ -189,7 +189,7 @@ export async function createEskPayment(skFile, ncFile) {
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') || '';
   const match = disposition.match(/filename="?([^"]+)"?/);
-  const filename = match?.[1] || 'ESK-Payment Listing.xlsx';
+  const filename = match?.[1] || 'ESK Payment Details.xlsx';
   const generated = res.headers.get('X-Esk-Generated-Rows');
 
   const url = URL.createObjectURL(blob);
@@ -202,4 +202,160 @@ export async function createEskPayment(skFile, ncFile) {
   URL.revokeObjectURL(url);
 
   return { filename, generated: generated ? Number(generated) : null };
+}
+
+export async function createStripeAdvice(stripeFile, ncFiles) {
+  const ncFileList = Array.isArray(ncFiles) ? ncFiles : [ncFiles];
+  if (ncFileList.length === 0) {
+    throw new Error('At least one NC Payment Listing file is required');
+  }
+
+  const form = new FormData();
+  form.append('stripeFile', stripeFile);
+  for (const ncFile of ncFileList) {
+    form.append('ncFile', ncFile);
+  }
+
+  const res = await fetch(`${API_BASE}/export/stripe-advice`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let message = `Failed to create Stripe Advice file (${res.status})`;
+    try {
+      const data = JSON.parse(text);
+      if (data.error) message = data.error;
+    } catch {
+      if (text.trim()) message = text.trim().slice(0, 300);
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || 'Stripe Advice.xlsx';
+  const generated = res.headers.get('X-Stripe-Advice-Generated-Rows');
+  const linked = res.headers.get('X-Stripe-Advice-Linked-Rows');
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  return {
+    filename,
+    generated: generated ? Number(generated) : null,
+    linked: linked ? Number(linked) : null,
+  };
+}
+
+export async function createGpay(grabFile, eskFiles) {
+  const eskFileList = Array.isArray(eskFiles) ? eskFiles : [eskFiles];
+  if (eskFileList.length === 0) {
+    throw new Error('At least one ESK Payment Details file is required');
+  }
+
+  const form = new FormData();
+  form.append('grabFile', grabFile);
+  for (const eskFile of eskFileList) {
+    form.append('eskFile', eskFile);
+  }
+
+  const res = await fetch(`${API_BASE}/export/gpay`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let message = `Failed to create GPay file (${res.status})`;
+    try {
+      const data = JSON.parse(text);
+      if (data.error) message = data.error;
+    } catch {
+      if (text.trim()) message = text.trim().slice(0, 300);
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || 'GPay.xlsx';
+  const generated = res.headers.get('X-GPay-Generated-Rows');
+  const linked = res.headers.get('X-GPay-Linked-Rows');
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  return {
+    filename,
+    generated: generated ? Number(generated) : null,
+    linked: linked ? Number(linked) : null,
+  };
+}
+
+export async function createShopback(shopbackFile, eskFiles) {
+  const eskFileList = Array.isArray(eskFiles) ? eskFiles : [eskFiles];
+  if (eskFileList.length === 0) {
+    throw new Error('At least one ESK Payment Details file is required');
+  }
+
+  const form = new FormData();
+  form.append('shopbackFile', shopbackFile);
+  for (const eskFile of eskFileList) {
+    form.append('eskFile', eskFile);
+  }
+
+  const res = await fetch(`${API_BASE}/export/shopback`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let message = `Failed to create Shopback file (${res.status})`;
+    try {
+      const data = JSON.parse(text);
+      if (data.error) message = data.error;
+    } catch {
+      if (text.trim()) message = text.trim().slice(0, 300);
+    }
+    throw new Error(message);
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || 'Shopback.xlsx';
+  const generated = res.headers.get('X-Shopback-Generated-Rows');
+  const linked = res.headers.get('X-Shopback-Linked-Rows');
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  return {
+    filename,
+    generated: generated ? Number(generated) : null,
+    linked: linked ? Number(linked) : null,
+  };
 }

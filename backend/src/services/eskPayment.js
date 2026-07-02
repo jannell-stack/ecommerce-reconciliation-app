@@ -1,23 +1,12 @@
-const fs = require('fs');
-const path = require('path');
 const XLSX = require('xlsx');
 const { applyColumnBDateStyles } = require('./eskPaymentStyles');
-
-const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'templates', 'ESK-Payment-template.xlsx');
-const META_PATH = path.join(__dirname, '..', '..', 'templates', 'esk-payment-meta.json');
-
-const NC_COL = {
-  HOLDER: 0,
-  DOC_NO: 1,
-  RETAIL_INVOICE: 2,
-  PAYMENT_TYPE: 3,
-  AMT: 4,
-  NOTE: 5,
-  NOTE_HELPER: 6,
-  ORDER_HELPER: 7,
-};
-
-const NC_HEADER_ROWS = 3;
+const {
+  detectNcListingDate,
+  isNcDateSeparatorRow,
+  isNcSummaryRow,
+  isNcValidDocNo,
+  resolveNcLayout,
+} = require('../utils/ncLayout');
 const SK_ORDER_ID = 0;
 const SK_ITEM_TYPE = 13;
 const SK_PRICE_PAID = 18;
@@ -26,21 +15,56 @@ const SK_LOOKUP_KEY = 33;
 const SK_LOOKUP_PRICE = 34;
 const SK_LOOKUP_METHOD = 35;
 const SK_ORDERS_MIN_COLUMNS = 36;
+
+const SK_LEGACY_COLUMNS = {
+  ORDER_ID: SK_ORDER_ID,
+  ITEM_TYPE: SK_ITEM_TYPE,
+  PRICE_PAID: SK_PRICE_PAID,
+  PAYMENT_METHOD: SK_PAYMENT_METHOD,
+};
+
+function resolveSkColumns(headerRow) {
+  const headers = (headerRow || []).map((cell) => String(cell ?? '').trim());
+  const pricePaidIndex = headers.indexOf('Order Final Price Paid');
+  const productTypeIndex = headers.indexOf('Product Type');
+
+  if (pricePaidIndex >= 0 && productTypeIndex >= 0) {
+    return {
+      ORDER_ID: Math.max(headers.indexOf('Order ID'), 0),
+      ITEM_TYPE: productTypeIndex,
+      PRICE_PAID: pricePaidIndex,
+      PAYMENT_METHOD: Math.max(headers.indexOf('Payment Method'), 16),
+    };
+  }
+
+  return SK_LEGACY_COLUMNS;
+}
 const XLSX_READ_OPTS = {
   cellStyles: false,
   cellHTML: false,
   cellFormula: false,
 };
 
-let cachedProductionMeta = null;
-
-function cellHasContent(cell) {
-  if (!cell) return false;
-  if (cell.f) return true;
-  return cell.v != null && cell.v !== '';
-}
-
 const LISTING_DATE_FORMAT = 'm/d/yy';
+const AMOUNT_NUMBER_FORMAT = '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)';
+
+const ESK_DETAIL_HEADERS = [
+  'Ord No.',
+  'Ord',
+  'docdate',
+  'BILLNO',
+  'RETAIL_INVOICE',
+  'PAYMENT',
+  'ORIGINALAMT',
+  'NOTE',
+  'DEPOSIT_REFUND',
+  'NET_TOTAL',
+  'COSTCODE',
+  'Final rounded price paid',
+  'diff',
+  'pymt type',
+  'Comment',
+];
 
 function setCell(sheet, address, value) {
   if (value && typeof value === 'object' && ('v' in value || 'f' in value)) {
@@ -66,6 +90,20 @@ function setDateCell(sheet, address, serial) {
     t: 'n',
     v: serial,
     z: LISTING_DATE_FORMAT,
+  };
+}
+
+function setAmountCell(sheet, address, value) {
+  if (value === '' || value == null) return;
+  const numeric = parseNumber(value);
+  if (Number.isNaN(numeric)) {
+    setCell(sheet, address, value);
+    return;
+  }
+  sheet[address] = {
+    t: 'n',
+    v: numeric,
+    z: AMOUNT_NUMBER_FORMAT,
   };
 }
 
@@ -99,15 +137,6 @@ function formatNoteFromNc(ncNote) {
   }
 
   return body;
-}
-
-function columnAFormula(excelRow) {
-  return `LEFT(G${excelRow},13)`;
-}
-
-function ncHolderValue(holder) {
-  if (holder === '' || holder == null) return ' ';
-  return holder;
 }
 
 function extractOrderKey(noteText) {
@@ -180,14 +209,15 @@ function shouldSplitGroupedOrders(orderIds, ncAmt, formattedNote, skLookup) {
   return ratio >= 2.925 && ratio <= 5;
 }
 
-function expandNcRow(ncRow, skLookup) {
-  const formattedNote = formatNoteFromNc(ncRow[NC_COL.NOTE]);
-  const ncAmt = parseNumber(ncRow[NC_COL.AMT]);
+function expandNcRow(ncRow, skLookup, layout) {
+  const { col: ncCol } = layout;
+  const formattedNote = formatNoteFromNc(ncRow[ncCol.NOTE]);
+  const ncAmt = parseNumber(ncRow[ncCol.AMT]);
   const defaultExpansion = {
     ncRow,
     orderKey: extractOrderKey(formattedNote),
     note: formattedNote,
-    amount: ncRow[NC_COL.AMT],
+    amount: ncRow[ncCol.AMT],
   };
 
   if (Number.isNaN(ncAmt)) return [defaultExpansion];
@@ -225,84 +255,6 @@ function expandNcRow(ncRow, skLookup) {
   }
 
   return [defaultExpansion];
-}
-
-function extractReferToInvoice(text) {
-  const match = String(text ?? '').match(/refer to\s+(LS0ESK\d+)/i);
-  return match ? match[1] : '';
-}
-
-function parseListingDate(value) {
-  if (isExcelDateSerial(value)) {
-    const date = new Date(Date.UTC(1899, 11, 30) + value * 86400000);
-    const monthNames = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    return {
-      serial: value,
-      sheetLabel: `${monthNames[date.getUTCMonth()]}${String(date.getUTCFullYear()).slice(-2)}`,
-    };
-  }
-
-  const text = String(value ?? '').trim();
-  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!match) return null;
-
-  const day = Number(match[1]);
-  const month = Number(match[2]);
-  const year = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (Number.isNaN(date.getTime())) return null;
-
-  const epoch = Date.UTC(1899, 11, 30);
-  const serial = Math.round((date.getTime() - epoch) / 86400000);
-  const monthNames = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-
-  return {
-    serial,
-    sheetLabel: `${monthNames[month - 1]}${String(year).slice(-2)}`,
-  };
-}
-
-const NC_SUMMARY_LABELS = new Set(['Grand Total', 'Deposit Refund', 'Net Total']);
-
-function isNcDateSeparatorRow(ncRow) {
-  const docNo = String(ncRow[NC_COL.DOC_NO] ?? '').trim();
-  if (docNo) return false;
-  return parseListingDate(ncRow[NC_COL.HOLDER]) != null;
-}
-
-function isNcSummaryRow(ncRow) {
-  const label = String(ncRow[NC_COL.PAYMENT_TYPE] ?? '').trim();
-  return NC_SUMMARY_LABELS.has(label);
-}
-
-function applyBlankSpacerRow(sheet, excelRow, valuesOnly) {
-  if (valuesOnly) {
-    setCell(sheet, `A${excelRow}`, '');
-  } else {
-    setCell(sheet, `A${excelRow}`, { f: columnAFormula(excelRow), v: '', t: 's' });
-  }
-  setCell(sheet, `B${excelRow}`, ' ');
-  for (const column of ['C', 'D', 'E', 'F']) {
-    setCell(sheet, `${column}${excelRow}`, ' ');
-  }
-}
-
-function applyDateSpacerRow(sheet, excelRow, dateSerial, valuesOnly) {
-  if (valuesOnly) {
-    setCell(sheet, `A${excelRow}`, '');
-  } else {
-    setCell(sheet, `A${excelRow}`, { f: columnAFormula(excelRow), v: '', t: 's' });
-  }
-  setDateCell(sheet, `B${excelRow}`, dateSerial);
-  for (const column of ['C', 'D', 'E', 'F']) {
-    setCell(sheet, `${column}${excelRow}`, ' ');
-  }
 }
 
 function findSheet(workbook, pattern) {
@@ -361,12 +313,15 @@ function buildProductionSkLookup(skBuffer) {
   let currentOrderId = '';
 
   const cellValue = (row, col) => sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
+  const skCol = resolveSkColumns(
+    Array.from({ length: range.e.c + 1 }, (_, col) => cellValue(0, col)),
+  );
 
   for (let row = 1; row <= range.e.r; row += 1) {
-    const orderId = String(cellValue(row, SK_ORDER_ID) ?? '').trim();
-    const itemType = String(cellValue(row, SK_ITEM_TYPE) ?? '').trim();
-    const pricePaid = skRowPricePaidFromValues(cellValue(row, SK_PRICE_PAID), itemType);
-    const paymentMethod = String(cellValue(row, SK_PAYMENT_METHOD) ?? '').trim();
+    const orderId = String(cellValue(row, skCol.ORDER_ID) ?? '').trim();
+    const itemType = String(cellValue(row, skCol.ITEM_TYPE) ?? '').trim();
+    const pricePaid = skRowPricePaidFromValues(cellValue(row, skCol.PRICE_PAID), itemType);
+    const paymentMethod = String(cellValue(row, skCol.PAYMENT_METHOD) ?? '').trim();
 
     if (orderId) {
       currentOrderId = orderId;
@@ -467,138 +422,6 @@ function resolveSkMatch(orderId, skLookup, amount, context, usageTracker) {
   return amountMatches[usedBefore] || candidate;
 }
 
-function buildSlimOrdersSheet(preparedSkRows) {
-  const slimRows = preparedSkRows.map((row, index) => {
-    if (index === 0) {
-      return [
-        row[SK_ORDER_ID] || 'Order ID',
-        row[SK_PRICE_PAID] ?? 'Price Paid',
-        row[SK_PAYMENT_METHOD] ?? 'Payment Method',
-        row[SK_LOOKUP_KEY] || 'LookupKey',
-        row[SK_LOOKUP_PRICE] ?? 'LookupPrice',
-        row[SK_LOOKUP_METHOD] ?? 'LookupMethod',
-      ];
-    }
-
-    return [
-      row[SK_ORDER_ID] ?? '',
-      row[SK_PRICE_PAID] ?? '',
-      row[SK_PAYMENT_METHOD] ?? '',
-      row[SK_LOOKUP_KEY] ?? '',
-      row[SK_LOOKUP_PRICE] ?? '',
-      row[SK_LOOKUP_METHOD] ?? '',
-    ];
-  });
-
-  return XLSX.utils.aoa_to_sheet(slimRows);
-}
-
-function prepareOrdersRowsForLookup(rows) {
-  const prepared = rows.map((row) => {
-    const copy = [...row];
-    while (copy.length < SK_ORDERS_MIN_COLUMNS) {
-      copy.push('');
-    }
-    return copy;
-  });
-  let currentOrderId = '';
-
-  for (let i = 1; i < prepared.length; i += 1) {
-    let orderId = String(prepared[i][SK_ORDER_ID] ?? '').trim();
-    if (orderId) {
-      prepared[i][SK_ORDER_ID] = orderId;
-      currentOrderId = orderId;
-      continue;
-    }
-
-    const pricePaid = skRowPricePaid(prepared[i]);
-    if (currentOrderId && Number.isFinite(pricePaid) && pricePaid !== 0) {
-      prepared[i][SK_ORDER_ID] = currentOrderId;
-    } else if (currentOrderId && isSkFeeRow(prepared[i])) {
-      prepared[i][SK_ORDER_ID] = currentOrderId;
-    }
-  }
-
-  if (prepared[0]) {
-    prepared[0][SK_LOOKUP_KEY] = 'LookupKey';
-    prepared[0][SK_LOOKUP_PRICE] = 'LookupPrice';
-    prepared[0][SK_LOOKUP_METHOD] = 'LookupMethod';
-  }
-
-  for (let i = 1; i < prepared.length; i += 1) {
-    const orderId = String(prepared[i][SK_ORDER_ID] ?? '').trim();
-    const pricePaid = skRowPricePaid(prepared[i]);
-    const paymentMethod = String(prepared[i][SK_PAYMENT_METHOD] ?? '').trim();
-
-    if (!orderId || !Number.isFinite(pricePaid)) continue;
-
-    const absPrice = Math.abs(pricePaid);
-    prepared[i][SK_LOOKUP_KEY] = `${orderId}|${absPrice}`;
-    prepared[i][SK_LOOKUP_PRICE] = pricePaid;
-    prepared[i][SK_LOOKUP_METHOD] = paymentMethod;
-  }
-
-  return prepared;
-}
-
-function buildSkLookup(rows) {
-  const lookup = new Map();
-  let currentOrderId = '';
-
-  for (let i = 1; i < rows.length; i += 1) {
-    const row = rows[i];
-    const orderId = String(row[SK_ORDER_ID] ?? '').trim();
-    const pricePaid = skRowPricePaid(row);
-    const paymentMethod = String(row[SK_PAYMENT_METHOD] ?? '').trim();
-
-    if (orderId) {
-      currentOrderId = orderId;
-      addSkLookupEntry(lookup, orderId, pricePaid, paymentMethod);
-      continue;
-    }
-
-    if (currentOrderId && Number.isFinite(pricePaid) && pricePaid !== 0) {
-      addSkLookupEntry(lookup, currentOrderId, pricePaid, paymentMethod);
-    } else if (currentOrderId && isSkFeeRow(row) && paymentMethod) {
-      addSkLookupEntry(lookup, currentOrderId, 0, paymentMethod);
-    }
-  }
-
-  return lookup;
-}
-
-function buildSkLookupFromBuffer(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'buffer', ...XLSX_READ_OPTS });
-  const sheetName = findSheet(workbook, /orders/i);
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet?.['!ref']) {
-    throw new Error('No Orders worksheet found in SK Combined file');
-  }
-
-  const range = XLSX.utils.decode_range(sheet['!ref']);
-  const lookup = new Map();
-
-  for (let row = 1; row <= range.e.r; row += 1) {
-    const orderCell = sheet[XLSX.utils.encode_cell({ r: row, c: SK_ORDER_ID })];
-    const orderId = String(orderCell?.v ?? '').trim();
-    if (!orderId) continue;
-
-    const priceCell = sheet[XLSX.utils.encode_cell({ r: row, c: SK_PRICE_PAID })];
-    const methodCell = sheet[XLSX.utils.encode_cell({ r: row, c: SK_PAYMENT_METHOD })];
-    const entry = {
-      pricePaid: parseNumber(priceCell?.v),
-      paymentMethod: String(methodCell?.v ?? '').trim(),
-    };
-
-    if (!lookup.has(orderId)) {
-      lookup.set(orderId, []);
-    }
-    lookup.get(orderId).push(entry);
-  }
-
-  return { lookup, sheetName };
-}
-
 function lookupSk(orderId, skLookup, amount, { paymentType, note } = {}) {
   const rows = skLookup.get(String(orderId ?? '').trim());
   if (!rows?.length) return null;
@@ -637,32 +460,25 @@ function hasSkStripePricedRow(orderKey, skLookup) {
   return rows.some((row) => row.paymentMethod === 'Stripe' && row.pricePaid !== 0);
 }
 
-function buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows = null) {
-  const existingKeys = new Set();
-  if (preparedSkRows) {
-    for (let i = 1; i < preparedSkRows.length; i += 1) {
-      const key = String(preparedSkRows[i][SK_LOOKUP_KEY] ?? '').trim();
-      if (key) existingKeys.add(key);
-    }
-  }
-
+function buildNcStripeCompositeMap(ncRows, skLookup, layout) {
+  const { col: ncCol, headerRows } = layout;
   const map = new Map();
 
-  for (let i = NC_HEADER_ROWS; i < ncRows.length; i += 1) {
+  for (let i = headerRows; i < ncRows.length; i += 1) {
     const ncRow = ncRows[i];
-    if (isNcDateSeparatorRow(ncRow) || isNcSummaryRow(ncRow)) continue;
+    if (isNcDateSeparatorRow(ncRow, layout) || isNcSummaryRow(ncRow, layout)) continue;
 
-    const paymentType = String(ncRow[NC_COL.PAYMENT_TYPE] ?? '').trim().toUpperCase();
+    const paymentType = String(ncRow[ncCol.PAYMENT_TYPE] ?? '').trim().toUpperCase();
     if (paymentType !== 'STRIPE') continue;
 
-    const orderKey = extractOrderKey(formatNoteFromNc(ncRow[NC_COL.NOTE]));
-    const amt = parseNumber(ncRow[NC_COL.AMT]);
+    const orderKey = extractOrderKey(formatNoteFromNc(ncRow[ncCol.NOTE]));
+    const amt = parseNumber(ncRow[ncCol.AMT]);
     if (!orderKey || Number.isNaN(amt)) continue;
-    if (isAdminFeeNote(formatNoteFromNc(ncRow[NC_COL.NOTE]))) continue;
+    if (isAdminFeeNote(formatNoteFromNc(ncRow[ncCol.NOTE]))) continue;
 
     const absAmt = Math.abs(amt);
     const key = `${orderKey}|${absAmt}`;
-    if (existingKeys.has(key) || map.has(key)) continue;
+    if (map.has(key)) continue;
     if (hasSkStripePricedRow(orderKey, skLookup)) continue;
 
     map.set(key, {
@@ -673,23 +489,6 @@ function buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows = null) {
   }
 
   return map;
-}
-
-function appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite) {
-  const existingKeys = new Set(
-    preparedSkRows.slice(1).map((row) => String(row[SK_LOOKUP_KEY] ?? '').trim()).filter(Boolean),
-  );
-
-  for (const entry of ncStripeComposite.values()) {
-    if (existingKeys.has(entry.key)) continue;
-    existingKeys.add(entry.key);
-
-    const newRow = new Array(SK_ORDERS_MIN_COLUMNS).fill('');
-    newRow[SK_LOOKUP_KEY] = entry.key;
-    newRow[SK_LOOKUP_PRICE] = entry.price;
-    newRow[SK_LOOKUP_METHOD] = entry.method;
-    preparedSkRows.push(newRow);
-  }
 }
 
 function resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite = null, note = '') {
@@ -728,27 +527,24 @@ function lookupSkPaymentMethod(orderId, skLookup, amount, ncStripeComposite = nu
   return rows[0]?.paymentMethod ?? null;
 }
 
-function buildOrdersLookupRange(ordersLastRow) {
-  const lastRow = Math.max(ordersLastRow, 2);
-  return {
-    fullRange: `Orders!$A$1:$AG$${lastRow}`,
-    keyRange: `Orders!$AH$2:$AJ$${lastRow}`,
-    lastRow,
-  };
+function buildNcMap(ncRows, layout) {
+  const { col: ncCol, headerRows } = layout;
+  const map = new Map();
+
+  for (let i = headerRows; i < ncRows.length; i += 1) {
+    const docNo = String(ncRows[i][ncCol.DOC_NO] ?? '').trim();
+    if (!isNcValidDocNo(docNo)) continue;
+    map.set(docNo, ncRows[i]);
+  }
+
+  return map;
 }
 
-function skLookupFormula(excelRow, ordersLookup, field) {
-  const keyColumn = field === 'price' ? 2 : 3;
-  const fallbackColumn = field === 'price' ? 19 : 20;
-  const compositeLookup = [
-    `VLOOKUP($A${excelRow}&"|"&TEXT(ABS($F${excelRow}),"0"),`,
-    `${ordersLookup.keyRange},${keyColumn},FALSE)`,
-  ].join('');
-  const orderLookup = `VLOOKUP($A${excelRow},${ordersLookup.fullRange},${fallbackColumn},FALSE)`;
-  return `IFERROR(${compositeLookup},${orderLookup})`;
+function finalizeSheetRange(sheet, rowCount) {
+  sheet['!ref'] = `A1:O${rowCount}`;
 }
 
-function buildPreparedOrdersFromSkBuffer(skBuffer) {
+function copySkOrdersSheet(skBuffer) {
   const workbook = XLSX.read(skBuffer, { type: 'buffer', ...XLSX_READ_OPTS });
   const sheetName = findSheet(workbook, /orders/i);
   const sheet = workbook.Sheets[sheetName];
@@ -756,440 +552,200 @@ function buildPreparedOrdersFromSkBuffer(skBuffer) {
     throw new Error('No Orders worksheet found in SK Combined file');
   }
 
-  const range = XLSX.utils.decode_range(sheet['!ref']);
-  const prepared = [];
-  const cellValue = (row, col) => sheet[XLSX.utils.encode_cell({ r: row, c: col })]?.v;
-
-  const headerRow = new Array(SK_ORDERS_MIN_COLUMNS).fill('');
-  headerRow[SK_ORDER_ID] = cellValue(0, SK_ORDER_ID) ?? '';
-  headerRow[SK_ITEM_TYPE] = cellValue(0, SK_ITEM_TYPE) ?? '';
-  headerRow[SK_PRICE_PAID] = cellValue(0, SK_PRICE_PAID) ?? '';
-  headerRow[SK_PAYMENT_METHOD] = cellValue(0, SK_PAYMENT_METHOD) ?? '';
-  prepared.push(headerRow);
-
-  for (let row = 1; row <= range.e.r; row += 1) {
-    const orderRow = new Array(SK_ORDERS_MIN_COLUMNS).fill('');
-    orderRow[SK_ORDER_ID] = cellValue(row, SK_ORDER_ID) ?? '';
-    orderRow[SK_ITEM_TYPE] = cellValue(row, SK_ITEM_TYPE) ?? '';
-    orderRow[SK_PRICE_PAID] = cellValue(row, SK_PRICE_PAID) ?? '';
-    orderRow[SK_PAYMENT_METHOD] = cellValue(row, SK_PAYMENT_METHOD) ?? '';
-    prepared.push(orderRow);
-  }
-
   return {
     sheetName,
-    rows: prepareOrdersRowsForLookup(prepared),
+    sheet,
+    lastRow: XLSX.utils.decode_range(sheet['!ref']).e.r + 1,
   };
 }
 
-function loadTemplateHeaderSheet() {
-  if (!fs.existsSync(TEMPLATE_PATH)) {
-    throw new Error('ESK payment template is missing. Expected backend/templates/ESK-Payment-template.xlsx');
-  }
-
-  const workbook = XLSX.read(fs.readFileSync(TEMPLATE_PATH), {
-    type: 'buffer',
-    ...XLSX_READ_OPTS,
-    sheetRows: NC_HEADER_ROWS,
-  });
-  const templateMainName = getTemplateMainSheetName(workbook);
-  const templateMain = workbook.Sheets[templateMainName];
-  if (!templateMain) {
-    throw new Error('ESK payment template main sheet is missing');
-  }
-
-  return { templateMainName, templateMain };
+function buildEskSheetTitle() {
+  return 'Payment Listing-Detail _sort';
 }
 
-function loadProductionMeta() {
-  if (cachedProductionMeta) return cachedProductionMeta;
-
-  if (!fs.existsSync(META_PATH)) {
-    throw new Error('ESK payment metadata is missing. Expected backend/templates/esk-payment-meta.json');
-  }
-
-  cachedProductionMeta = JSON.parse(fs.readFileSync(META_PATH, 'utf8'));
-  return cachedProductionMeta;
+function buildEskOutputFilename() {
+  return 'ESK Payment Details.xlsx';
 }
 
-function useValuesOnlyOutput() {
-  return process.env.ESK_VALUES_ONLY === 'true';
+function compareDetailEntries(a, b, ncCol) {
+  const dateA = parseNumber(a.ncRow[ncCol.HOLDER]);
+  const dateB = parseNumber(b.ncRow[ncCol.HOLDER]);
+  const safeDateA = Number.isFinite(dateA) ? dateA : Number.MAX_SAFE_INTEGER;
+  const safeDateB = Number.isFinite(dateB) ? dateB : Number.MAX_SAFE_INTEGER;
+  if (safeDateA !== safeDateB) return safeDateA - safeDateB;
+
+  return String(a.ncRow[ncCol.DOC_NO] ?? '').localeCompare(String(b.ncRow[ncCol.DOC_NO] ?? ''));
 }
 
-function getTemplateMainSheetName(workbook) {
-  return workbook.SheetNames.find((name) => /payment listing/i.test(name)) || workbook.SheetNames[0];
+function detailOrdersLookupRange(lastRow) {
+  return `Orders!$A$1:$Q$${Math.max(lastRow, 2)}`;
 }
 
-function buildTemplateMetadata(templateMain) {
-  const rows = XLSX.utils.sheet_to_json(templateMain, { header: 1, defval: null });
-  const patterns = new Map();
-
-  for (let i = 3; i < rows.length; i += 1) {
-    const docNo = String(rows[i][2] ?? '').trim();
-    if (!docNo) continue;
-    const excelRow = i + 1;
-    const hCell = templateMain[`H${excelRow}`];
-    const iCell = templateMain[`I${excelRow}`];
-    const jCell = templateMain[`J${excelRow}`];
-    const kCell = templateMain[`K${excelRow}`];
-
-    patterns.set(docNo, {
-      hasH: cellHasContent(hCell),
-      hasI: cellHasContent(iCell),
-      hasJ: cellHasContent(jCell),
-      hasK: cellHasContent(kCell),
-      hFormula: hCell?.f || null,
-      hValue: hCell?.v ?? null,
-      jValue: jCell?.v ?? null,
-      kValue: kCell?.v ?? null,
-      kFormula: kCell?.f || null,
-      retailInvoice: rows[i][3] ?? null,
-      templateNote: rows[i][6] ?? null,
-      templateOrderId: rows[i][0] ?? null,
-    });
-  }
-
-  return { patterns };
-}
-
-function buildNcMap(ncRows) {
-  const map = new Map();
-
-  for (let i = NC_HEADER_ROWS; i < ncRows.length; i += 1) {
-    const docNo = String(ncRows[i][NC_COL.DOC_NO] ?? '').trim();
-    if (!docNo || docNo.toUpperCase() === 'ESK') continue;
-    map.set(docNo, ncRows[i]);
-  }
-
-  return map;
-}
-
-function clearFormulaCells(sheet, excelRow, columns) {
-  for (const column of columns) {
-    delete sheet[`${column}${excelRow}`];
-  }
-}
-
-function updateFormulaRow(
+function writeDetailRow(
   sheet,
   excelRow,
   ncRow,
-  pattern,
+  layout,
+  expansion,
   skLookup,
-  valuesOnly,
+  ordersLookupRange,
+  ncStripeComposite,
   usageTracker,
-  expansion = null,
-  ordersLookup = null,
-  ncStripeComposite = null,
 ) {
-  const note = expansion?.note ?? formatNoteFromNc(ncRow[NC_COL.NOTE]);
+  const { col: ncCol } = layout;
+  const note = expansion?.note ?? formatNoteFromNc(ncRow[ncCol.NOTE]);
   const orderKey = expansion?.orderKey ?? extractOrderKey(note);
-  const rowAmount = expansion?.amount ?? ncRow[NC_COL.AMT];
-  const docNo = String(ncRow[NC_COL.DOC_NO] ?? '').trim();
+  const rowAmount = expansion?.amount ?? ncRow[ncCol.AMT];
   const skMatch = resolveSkMatch(orderKey, skLookup, rowAmount, {
-    paymentType: ncRow[NC_COL.PAYMENT_TYPE],
+    paymentType: ncRow[ncCol.PAYMENT_TYPE],
     note,
   }, usageTracker);
-  const useFormulas = !valuesOnly;
 
-  if (valuesOnly) {
-    setCell(sheet, `A${excelRow}`, orderKey);
-  } else {
-    setCell(sheet, `A${excelRow}`, { f: columnAFormula(excelRow), v: orderKey, t: 's' });
-  }
-  setCell(sheet, `B${excelRow}`, ncHolderValue(ncRow[NC_COL.HOLDER]));
-  setCell(sheet, `C${excelRow}`, docNo);
-  setCell(sheet, `D${excelRow}`, ncRow[NC_COL.RETAIL_INVOICE]);
-  setCell(sheet, `E${excelRow}`, ncRow[NC_COL.PAYMENT_TYPE]);
-  setCell(sheet, `F${excelRow}`, rowAmount);
-  setCell(sheet, `G${excelRow}`, note);
+  setCell(sheet, `H${excelRow}`, note);
+  setCell(sheet, `A${excelRow}`, {
+    f: `LEFT(H${excelRow},13)`,
+    v: orderKey,
+    t: 's',
+  });
+  setCell(sheet, `B${excelRow}`, {
+    f: `LEFT(H${excelRow},6)`,
+    v: orderKey ? orderKey.slice(0, 6) : '',
+    t: 's',
+  });
 
-  clearFormulaCells(sheet, excelRow, ['H', 'I', 'J', 'K']);
+  setDateCell(sheet, `C${excelRow}`, ncRow[ncCol.HOLDER]);
+  setCell(sheet, `D${excelRow}`, ncRow[ncCol.DOC_NO]);
+  setCell(sheet, `E${excelRow}`, ncRow[ncCol.RETAIL_INVOICE]);
+  setCell(sheet, `F${excelRow}`, ncRow[ncCol.PAYMENT_TYPE]);
+  setAmountCell(sheet, `G${excelRow}`, rowAmount);
+  setCell(sheet, `I${excelRow}`, ncRow[ncCol.DEPOSIT_REFUND] ?? '');
+  setCell(sheet, `J${excelRow}`, ncRow[ncCol.NET_TOTAL] ?? rowAmount);
+  setCell(sheet, `K${excelRow}`, ncRow[ncCol.COSTCODE] ?? '');
 
-  let hValue = null;
-  if (pattern.hasH) {
-    if (useFormulas && pattern.hFormula && ordersLookup) {
-      hValue = resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite, note);
-      if (hValue != null && Number.isNaN(hValue)) hValue = null;
-      setCell(sheet, `H${excelRow}`, {
-        f: skLookupFormula(excelRow, ordersLookup, 'price'),
-        v: hValue ?? 0,
-        t: 'n',
-      });
-    } else if (pattern.hFormula || skMatch) {
-      hValue = resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite, note);
-      if (hValue != null && Number.isNaN(hValue)) hValue = null;
-      setCell(sheet, `H${excelRow}`, hValue);
-    } else if (pattern.hValue != null) {
-      hValue = pattern.hValue;
-      setCell(sheet, `H${excelRow}`, { v: hValue, t: 'n' });
-    }
+  const hValue = resolveHLookupValue(orderKey, rowAmount, skLookup, ncStripeComposite, note);
+  const paymentMethod =
+    lookupSkPaymentMethod(orderKey, skLookup, rowAmount, ncStripeComposite, note)
+    ?? skMatch?.paymentMethod
+    ?? null;
+  const amount = parseNumber(rowAmount);
+  const diff = !Number.isNaN(amount) && hValue != null && !Number.isNaN(hValue)
+    ? amount - hValue
+    : null;
 
-    if (pattern.hasI) {
-      const amount = parseNumber(rowAmount);
-      const diff = !Number.isNaN(amount) ? amount - (hValue ?? 0) : null;
-      if (useFormulas) {
-        setCell(sheet, `I${excelRow}`, {
-          f: `F${excelRow}-H${excelRow}`,
-          v: diff,
-          t: 'n',
-        });
-      } else {
-        setCell(sheet, `I${excelRow}`, diff);
-      }
-    }
-  }
-
-  if (pattern.hasJ) {
-    const paymentMethod =
-      lookupSkPaymentMethod(orderKey, skLookup, rowAmount, ncStripeComposite, note)
-      ?? skMatch?.paymentMethod
-      ?? null;
-    if (useFormulas && ordersLookup) {
-      setCell(sheet, `J${excelRow}`, {
-        f: skLookupFormula(excelRow, ordersLookup, 'method'),
-        v: paymentMethod ?? '',
-        t: 's',
-      });
-    } else if (paymentMethod != null) {
-      setCell(sheet, `J${excelRow}`, paymentMethod);
-    }
-  }
-
-  if (pattern.hasK) {
-    const referInvoice =
-      extractReferToInvoice(note) || extractReferToInvoice(ncRow[NC_COL.NOTE]);
-    const kValue = pattern.kValue ?? referInvoice ?? null;
-    if (kValue != null || pattern.kFormula) {
-      if (valuesOnly) {
-        setCell(sheet, `K${excelRow}`, kValue);
-      } else {
-        setCell(sheet, `K${excelRow}`, {
-          f: pattern.kFormula || undefined,
-          v: kValue,
-          t: typeof kValue === 'number' ? 'n' : 's',
-        });
-      }
-    }
-  }
-}
-
-function applyHeaderRows(sheet, headerRows) {
-  headerRows.forEach((row, rowIndex) => {
-    row.forEach((value, columnIndex) => {
-      if (value == null || value === '') return;
-      const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
-      if (columnIndex === 1) {
-        setColumnBCell(sheet, address, value);
-        return;
-      }
-      setCell(sheet, address, value);
-    });
+  setCell(sheet, `L${excelRow}`, {
+    f: `VLOOKUP(A${excelRow},${ordersLookupRange},16,0)`,
+    v: hValue ?? 0,
+    t: 'n',
+  });
+  setCell(sheet, `M${excelRow}`, {
+    f: `G${excelRow}-L${excelRow}`,
+    v: diff,
+    t: 'n',
+  });
+  setCell(sheet, `N${excelRow}`, {
+    f: `VLOOKUP(A${excelRow},${ordersLookupRange},17,0)`,
+    v: paymentMethod ?? '',
+    t: 's',
   });
 }
 
-function applySpacerRow(sheet, excelRow, cells) {
-  for (const [column, cell] of Object.entries(cells)) {
-    const address = `${column}${excelRow}`;
-    if (cell.f) {
-      const output = { t: cell.t || 's', v: cell.v, f: cell.f };
-      if (column === 'B' && isExcelDateSerial(cell.v)) {
-        output.z = LISTING_DATE_FORMAT;
-      }
-      sheet[address] = output;
-      continue;
-    }
-    if (column === 'B') {
-      setColumnBCell(sheet, address, cell.v);
-      continue;
-    }
-    setCell(sheet, address, cell.v);
-  }
-}
-
-function finalizeSheetRange(sheet, rowCount) {
-  sheet['!ref'] = `A1:AB${rowCount}`;
-}
-
-const DEFAULT_DATA_ROW_PATTERN = {
-  hasH: true,
-  hasI: true,
-  hasJ: true,
-  hasK: false,
-  hFormula: true,
-};
-
-function copyHeaderRowsFromTemplate(templateMain, sheet) {
-  const templateRows = XLSX.utils.sheet_to_json(templateMain, { header: 1, defval: null });
-
-  for (let rowIndex = 0; rowIndex < NC_HEADER_ROWS; rowIndex += 1) {
-    const row = templateRows[rowIndex] || [];
-    row.forEach((value, columnIndex) => {
-      if (value == null && value !== 0 && value !== ' ') return;
-      const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
-      if (columnIndex === 1) {
-        setColumnBCell(sheet, address, value);
-        return;
-      }
-      setCell(sheet, address, value);
-    });
-  }
-}
-
-function buildMainSheetFromNcRows(
+function buildDetailSheetFromNcRows(
   ncRows,
-  skRows,
   skLookup,
-  listingDate,
-  valuesOnly,
-  { headerRows, headerSource, ncStripeComposite = null } = {},
+  layout,
+  { ncStripeComposite = null, ordersLastRow = 0 } = {},
 ) {
+  const { col: ncCol, headerRows: dataStartRow } = layout;
   const sheet = {};
-
-  if (headerRows) {
-    applyHeaderRows(sheet, headerRows);
-  } else if (headerSource) {
-    copyHeaderRowsFromTemplate(headerSource, sheet);
-  }
-
-  if (listingDate) {
-    setDateCell(sheet, 'B3', listingDate.serial);
-  }
-
-  let generated = 0;
-  let excelRow = NC_HEADER_ROWS;
   const usageTracker = createSkUsageTracker(skLookup);
-  const ordersLookup = valuesOnly ? null : buildOrdersLookupRange(skRows.length);
+  const ordersLookupRange = detailOrdersLookupRange(ordersLastRow);
+  const entries = [];
 
-  for (let i = NC_HEADER_ROWS; i < ncRows.length; i += 1) {
+  ESK_DETAIL_HEADERS.forEach((header, columnIndex) => {
+    setCell(sheet, XLSX.utils.encode_cell({ r: 0, c: columnIndex }), header);
+  });
+
+  for (let i = dataStartRow; i < ncRows.length; i += 1) {
     const ncRow = ncRows[i];
+    if (isNcDateSeparatorRow(ncRow, layout) || isNcSummaryRow(ncRow, layout)) continue;
 
-    if (isNcDateSeparatorRow(ncRow)) {
-      const rowDate = parseListingDate(ncRow[NC_COL.HOLDER]);
-      excelRow += 1;
-      applyBlankSpacerRow(sheet, excelRow, valuesOnly);
-      excelRow += 1;
-      applyDateSpacerRow(sheet, excelRow, rowDate.serial, valuesOnly);
-      continue;
-    }
+    const docNo = String(ncRow[ncCol.DOC_NO] ?? '').trim();
+    if (!isNcValidDocNo(docNo)) continue;
 
-    if (isNcSummaryRow(ncRow)) continue;
-
-    const docNo = String(ncRow[NC_COL.DOC_NO] ?? '').trim();
-    if (!docNo || docNo.toUpperCase() === 'ESK') continue;
-
-    const expansions = expandNcRow(ncRow, skLookup);
+    const expansions = expandNcRow(ncRow, skLookup, layout);
     for (const expansion of expansions) {
-      excelRow += 1;
-      updateFormulaRow(
-        sheet,
-        excelRow,
-        ncRow,
-        DEFAULT_DATA_ROW_PATTERN,
-        skLookup,
-        valuesOnly,
-        usageTracker,
-        expansion,
-        ordersLookup,
-        ncStripeComposite,
-      );
-      generated += 1;
+      entries.push({ ncRow, expansion });
     }
   }
 
-  excelRow += 1;
-  applyBlankSpacerRow(sheet, excelRow, valuesOnly);
+  entries.sort((a, b) => compareDetailEntries(a, b, ncCol));
 
-  finalizeSheetRange(sheet, excelRow);
-  return { sheet, generated, rowCount: excelRow };
+  let excelRow = 1;
+  for (const entry of entries) {
+    excelRow += 1;
+    writeDetailRow(
+      sheet,
+      excelRow,
+      entry.ncRow,
+      layout,
+      entry.expansion,
+      skLookup,
+      ordersLookupRange,
+      ncStripeComposite,
+      usageTracker,
+    );
+  }
+
+  finalizeSheetRange(sheet, Math.max(excelRow, 1));
+  return { sheet, generated: entries.length, rowCount: excelRow };
 }
 
-async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
-  const valuesOnly = useValuesOnlyOutput();
-  const { sheetName: ncSheetName, rows: ncRows } = readSheetRows(ncBuffer, /payment listing/i);
+async function createEskPaymentWorkbook(skBuffer, ncBuffer, { ncFileName = null } = {}) {
+  const ncWorkbook = XLSX.read(ncBuffer, { type: 'buffer', ...XLSX_READ_OPTS });
+  const ncSheetName = findSheet(ncWorkbook, /payment listing/i);
+  const ncSheet = ncWorkbook.Sheets[ncSheetName];
+  if (!ncSheet) {
+    throw new Error('No worksheet found in NC payment listing file');
+  }
 
-  if (ncRows.length <= NC_HEADER_ROWS) {
+  const ncRows = XLSX.utils.sheet_to_json(ncSheet, { header: 1, defval: '' });
+  const ncLayout = resolveNcLayout(ncRows[0]);
+
+  if (ncRows.length <= ncLayout.headerRows) {
     throw new Error('NC payment listing file has no data rows');
   }
 
-  const listingDate = parseListingDate(ncRows[2]?.[0]);
-  const ncMap = buildNcMap(ncRows);
+  const listingDate = detectNcListingDate(ncWorkbook, ncRows, ncLayout, ncFileName);
+  const ncMap = buildNcMap(ncRows, ncLayout);
+  const { lookup: skLookup, sheetName: skSheetName } = buildProductionSkLookup(skBuffer);
+  const ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup, ncLayout);
+  const { sheet: ordersSheet, lastRow: ordersLastRow } = copySkOrdersSheet(skBuffer);
 
-  let skSheetName;
-  let skLookup;
-  let preparedSkRows = null;
-  let ncStripeComposite = null;
+  const sheetTitle = buildEskSheetTitle();
+  const { sheet: mainSheet, generated } = buildDetailSheetFromNcRows(
+    ncRows,
+    skLookup,
+    ncLayout,
+    { ncStripeComposite, ordersLastRow },
+  );
 
-  if (valuesOnly) {
-    ({ lookup: skLookup, sheetName: skSheetName } = buildProductionSkLookup(skBuffer));
-    ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup);
-  } else {
-    ({ sheetName: skSheetName, rows: preparedSkRows } = buildPreparedOrdersFromSkBuffer(skBuffer));
-    skLookup = buildSkLookup(preparedSkRows);
-    ncStripeComposite = buildNcStripeCompositeMap(ncRows, skLookup, preparedSkRows);
-    appendNcStripeCompositeRows(preparedSkRows, ncStripeComposite);
-  }
-
-  let mainSheet;
-  let generated;
-  let sheetTitle;
-
-  if (valuesOnly) {
-    const meta = loadProductionMeta();
-    sheetTitle = listingDate
-      ? `Payment Listing-${listingDate.sheetLabel}`
-      : meta.mainSheetName;
-
-    ({ sheet: mainSheet, generated } = buildMainSheetFromNcRows(
-      ncRows,
-      preparedSkRows || [],
-      skLookup,
-      listingDate,
-      valuesOnly,
-      { headerRows: meta.headerRows, ncStripeComposite },
-    ));
-  } else {
-    const { templateMainName, templateMain } = loadTemplateHeaderSheet();
-    sheetTitle = listingDate
-      ? `Payment Listing-${listingDate.sheetLabel}`
-      : templateMainName;
-
-    ({ sheet: mainSheet, generated } = buildMainSheetFromNcRows(
-      ncRows,
-      preparedSkRows,
-      skLookup,
-      listingDate,
-      false,
-      { headerSource: templateMain, ncStripeComposite },
-    ));
-  }
-
-  const workbook = valuesOnly
-    ? {
-      SheetNames: [sheetTitle],
-      Sheets: { [sheetTitle]: mainSheet },
-    }
-    : {
-      SheetNames: [sheetTitle, 'Orders'],
-      Sheets: {
-        [sheetTitle]: mainSheet,
-        Orders: XLSX.utils.aoa_to_sheet(preparedSkRows),
-      },
-    };
+  const workbook = {
+    SheetNames: [sheetTitle, 'Orders'],
+    Sheets: {
+      [sheetTitle]: mainSheet,
+      Orders: ordersSheet,
+    },
+  };
 
   let buffer = XLSX.write(workbook, {
     type: 'buffer',
     bookType: 'xlsx',
     compression: true,
-    cellStyles: !valuesOnly,
-    cellFormula: !valuesOnly,
+    cellStyles: true,
+    cellFormula: true,
   });
-  if (!valuesOnly) {
-    preparedSkRows = null;
-    mainSheet = null;
-    buffer = await applyColumnBDateStyles(buffer);
-  }
-  const filename = `ESK-Payment Listing${listingDate ? `-${listingDate.sheetLabel}` : ''}.xlsx`;
+  buffer = await applyColumnBDateStyles(buffer);
+  const filename = buildEskOutputFilename();
 
   return {
     buffer,
@@ -1199,7 +755,6 @@ async function createEskPaymentWorkbook(skBuffer, ncBuffer) {
     skipped: ncMap.size - generated,
     skSheetName,
     ncSheetName,
-    valuesOnly,
   };
 }
 
