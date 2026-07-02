@@ -540,7 +540,7 @@ export default function Dashboard() {
           <span className="toolbar__label">ESK Payment</span>
           <div className="toolbar__action-rows">
             <div className="toolbar__actions toolbar__actions--stacked">
-            <label className="file-btn btn-integration">
+            <label className="file-btn btn-integration btn-esk-file">
               SK Verification
               <input
                 type="file"
@@ -553,7 +553,7 @@ export default function Dashboard() {
                 }}
               />
             </label>
-            <label className="file-btn btn-integration">
+            <label className="file-btn btn-integration btn-esk-file">
               NC Listing
               <input
                 type="file"
@@ -687,7 +687,7 @@ export default function Dashboard() {
             </div>
             <div className="toolbar__actions toolbar__actions--stacked">
               <div className="toolbar__actions-segment">
-              <label className="file-btn btn-integration">
+              <label className="file-btn btn-integration btn-gpay-file">
                 Grab Transaction
                 <input
                   type="file"
@@ -700,7 +700,7 @@ export default function Dashboard() {
                   }}
                 />
               </label>
-              <label className="file-btn btn-integration">
+              <label className="file-btn btn-integration btn-gpay-file">
                 ESK for Grab
                 {gpayEskFiles.length > 0 ? ` (${gpayEskFiles.length})` : ''}
                 <input
@@ -774,7 +774,7 @@ export default function Dashboard() {
               </button>
               </div>
               <div className="toolbar__actions-segment toolbar__actions-segment--shopback">
-              <label className="file-btn btn-integration">
+              <label className="file-btn btn-integration btn-shopback-file">
                 Shopback Transaction
                 <input
                   type="file"
@@ -787,7 +787,7 @@ export default function Dashboard() {
                   }}
                 />
               </label>
-              <label className="file-btn btn-integration">
+              <label className="file-btn btn-integration btn-shopback-file">
                 ESK for Shopback
                 {shopbackEskFiles.length > 0 ? ` (${shopbackEskFiles.length})` : ''}
                 <input
