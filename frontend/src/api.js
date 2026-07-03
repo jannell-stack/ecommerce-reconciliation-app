@@ -1,12 +1,52 @@
+import { clearAuth, getStoredPassword, setStoredPassword } from './auth';
+
 const API_BASE = '/api';
+
+function authHeaders(extraHeaders = {}) {
+  const password = getStoredPassword();
+  const headers = { ...extraHeaders };
+  if (password) {
+    headers['X-App-Password'] = password;
+  }
+  return headers;
+}
+
+function handleUnauthorized(res) {
+  if (res.status === 401) {
+    clearAuth();
+    window.location.reload();
+    throw new Error('Session expired. Please sign in again.');
+  }
+}
+
+export async function loginWithPassword(password) {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Invalid password');
+  }
+
+  setStoredPassword(password);
+  return data;
+}
 
 async function request(path, options = {}) {
   let res;
   try {
-    res = await fetch(`${API_BASE}${path}`, options);
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: authHeaders(options.headers),
+    });
   } catch (err) {
     throw new Error(err.message || 'Network error — the server may be restarting. Try again in a moment.');
   }
+
+  handleUnauthorized(res);
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -132,7 +172,10 @@ export function clearStripeImport() {
 }
 
 async function downloadExcelExport(path, fallbackPrefix) {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: authHeaders(),
+  });
+  handleUnauthorized(res);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || 'Export failed');
@@ -171,9 +214,11 @@ export async function createEskPayment(skFile, ncFile) {
 
   const res = await fetch(`${API_BASE}/export/esk-payment`, {
     method: 'POST',
+    headers: authHeaders(),
     body: form,
   });
 
+  handleUnauthorized(res);
   if (!res.ok) {
     const text = await res.text();
     let message = `Failed to create ESK-Payment file (${res.status})`;
@@ -218,9 +263,11 @@ export async function createStripeAdvice(stripeFile, ncFiles) {
 
   const res = await fetch(`${API_BASE}/export/stripe-advice`, {
     method: 'POST',
+    headers: authHeaders(),
     body: form,
   });
 
+  handleUnauthorized(res);
   if (!res.ok) {
     const text = await res.text();
     let message = `Failed to create Stripe Advice file (${res.status})`;
@@ -270,9 +317,11 @@ export async function createGpay(grabFile, eskFiles) {
 
   const res = await fetch(`${API_BASE}/export/gpay`, {
     method: 'POST',
+    headers: authHeaders(),
     body: form,
   });
 
+  handleUnauthorized(res);
   if (!res.ok) {
     const text = await res.text();
     let message = `Failed to create GPay file (${res.status})`;
@@ -322,9 +371,11 @@ export async function createShopback(shopbackFile, eskFiles) {
 
   const res = await fetch(`${API_BASE}/export/shopback`, {
     method: 'POST',
+    headers: authHeaders(),
     body: form,
   });
 
+  handleUnauthorized(res);
   if (!res.ok) {
     const text = await res.text();
     let message = `Failed to create Shopback file (${res.status})`;

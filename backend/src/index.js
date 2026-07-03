@@ -28,6 +28,8 @@ const insightsRouter = require('./routes/insights');
 const dataRouter = require('./routes/data');
 const importRouter = require('./routes/import');
 const exportRouter = require('./routes/export');
+const authRouter = require('./routes/auth');
+const { requireAppAuth } = require('./middleware/appAuth');
 const { startScheduler } = require('./scheduler');
 
 const app = express();
@@ -42,6 +44,9 @@ const api = express.Router();
 api.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
+
+api.use('/auth', authRouter);
+api.use(requireAppAuth);
 
 api.use('/orders', ordersRouter);
 api.use('/payments', paymentsRouter);
@@ -58,6 +63,8 @@ if (!isProduction) {
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
+  app.use('/auth', authRouter);
+  app.use(requireAppAuth);
   app.use('/orders', ordersRouter);
   app.use('/payments', paymentsRouter);
   app.use('/reconcile', reconcileRouter);
