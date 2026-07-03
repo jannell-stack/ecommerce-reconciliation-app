@@ -31,7 +31,9 @@ export default function LoginGate({ children }) {
     <div className="login-gate">
       <form className="login-gate__card" onSubmit={handleSubmit}>
         <h1 className="login-gate__title">Ecommerce Reconciliation</h1>
-        <p className="login-gate__subtitle">Enter the password to continue.</p>
+        <p className="login-gate__subtitle">
+          Enter the password to continue. Signing in clears any previously imported data.
+        </p>
         <label className="login-gate__label" htmlFor="app-password">
           Password
         </label>
