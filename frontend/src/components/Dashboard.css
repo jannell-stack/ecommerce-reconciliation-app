@@ -16,9 +16,16 @@
   --radius: 12px;
   --radius-sm: 8px;
 
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 2rem 1.5rem 3rem;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toolbar--nested {
+  margin-bottom: 0;
+  padding: 1rem;
+  box-shadow: none;
+  border: 1px dashed var(--border);
 }
 
 .dashboard__header {
